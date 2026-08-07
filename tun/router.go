@@ -35,6 +35,12 @@ func NewRouter(device Device) (*Router, error) {
 	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4)}, nil
 }
 
+func (r *Router) Bind(address netip.Addr, send SendIPv4) {
+	r.mu.Lock()
+	r.routes[address] = send
+	r.mu.Unlock()
+}
+
 // RouteIPv4 implements server.IPv4Router.
 func (r *Router) RouteIPv4(_ context.Context, frame server.DataFrame, send func([]byte) error) error {
 	source, _, err := packetAddresses(frame.IPv4)

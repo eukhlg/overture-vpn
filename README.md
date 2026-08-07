@@ -32,7 +32,9 @@ docker compose logs -f l2tp
 
 The Compose service publishes UDP 1701, grants only `NET_ADMIN`, mounts
 `/dev/net/tun`, enables IPv4 forwarding in the container namespace, and
-masquerades the configured client subnet through `L2TP_NAT_INTERFACE`.
+masquerades the configured client subnet through the interface selected by the
+container's IPv4 default route. `L2TP_NAT_INTERFACE` remains available as an
+explicit override.
 
 Stop and remove it with:
 
@@ -84,22 +86,33 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 
 | Environment variable | Default | Purpose |
 |---|---:|---|
-| `L2TP_PASSWORD` | required | PAP password |
-| `L2TP_USERNAME` | `vpn` | PPP username |
+| `L2TP_PASSWORD` | required unless `L2TP_USERS` is set | Password for the legacy single user |
+| `L2TP_USERNAME` | `vpn` | Username for the legacy single user |
+| `L2TP_USERS` | empty | Comma-separated `username=password` credentials |
 | `L2TP_AUTH` | `mschapv2` | PPP authentication: `mschapv2` or `pap` |
 | `L2TP_DEBUG` | `false` | Enable sanitized protocol tracing |
 | `L2TP_LISTEN` | `:1701` | UDP listen address |
 | `L2TP_HOSTNAME` | `l2tp-go` | Advertised L2TP host name |
-| `L2TP_SERVER_IP` | `10.0.0.1` | Server-side PPP address |
-| `L2TP_CLIENT_IP` | `10.0.0.2` | Address assigned to the client |
+| `L2TP_CLIENT_SUBNET` | `10.0.0.0/24` | PPP client subnet and Docker NAT source |
+| `L2TP_SERVER_IP` | `1` | Server address or host offset inside the client subnet |
+| `L2TP_CLIENT_POOL_START` | `2` | First pool address or host offset |
+| `L2TP_CLIENT_POOL_SIZE` | `50` | Number of addresses in the client pool |
 | `L2TP_DNS` | `1.1.1.1` | DNS address offered through IPCP |
 | `L2TP_TUN_ENABLED` | `false` | Enable native TUN routing |
 | `L2TP_TUN_NAME` | automatic | Requested TUN interface name |
-| `L2TP_TUN_PREFIX` | `10.0.0.1/24` | Address/prefix configured on TUN |
 | `L2TP_MTU` | `1400` | TUN MTU |
 | `L2TP_NAT_ENABLED` | `true` in Docker | Enable container NAT |
-| `L2TP_CLIENT_SUBNET` | `10.0.0.0/24` | Docker NAT source subnet |
-| `L2TP_NAT_INTERFACE` | `eth0` | Docker outbound interface |
+| `L2TP_NAT_INTERFACE` | automatic | Docker outbound-interface override |
+| `L2TP_MAX_SESSIONS` | pool size | Global simultaneous-session limit |
+| `L2TP_MAX_SESSIONS_PER_TUNNEL` | `1` | Simultaneous sessions in one L2TP tunnel |
+| `L2TP_MAX_SESSIONS_PER_USER` | `1` | Authenticated sessions for one username |
+
+Both address settings accept a full IPv4 address or a host offset. For example,
+subnet `10.0.0.0/24`, server `1`, start `100`, and limit `50` produce server
+`10.0.0.1` and leases `10.0.0.100` through `10.0.0.149`. `L2TP_CLIENT_IP` is
+accepted as a deprecated single-client pool-start alias. The proposed
+`L2TP_CLIENT_SUBNET_START` and `L2TP_CLIENT_SUBNET_LIMIT` names are also
+accepted as compatibility aliases.
 
 ## Client settings
 
