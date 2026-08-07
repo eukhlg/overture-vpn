@@ -78,6 +78,16 @@ func TestRouterRunStopsWithContext(t *testing.T) {
 	}
 }
 
+func TestRouterBindBeforeClientTraffic(t *testing.T) {
+	router, _ := NewRouter(newMemoryDevice())
+	var returned []byte
+	router.Bind(netip.MustParseAddr("10.0.0.2"), func(packet []byte) error { returned = append([]byte(nil), packet...); return nil })
+	packet := ipv4Packet([4]byte{8, 8, 8, 8}, [4]byte{10, 0, 0, 2})
+	if err := router.dispatch(packet); err != nil || !bytes.Equal(returned, packet) {
+		t.Fatalf("returned=%x err=%v", returned, err)
+	}
+}
+
 func TestRouterRunDropsUnsupportedPackets(t *testing.T) {
 	device := newMemoryDevice()
 	router, _ := NewRouter(device)
