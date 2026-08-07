@@ -28,6 +28,7 @@ func main() {
 	tunName := flag.String("tun-name", envString("L2TP_TUN_NAME", ""), "requested TUN name (empty selects automatically)")
 	tunPrefix := flag.String("tun-prefix", envString("L2TP_TUN_PREFIX", "10.0.0.1/24"), "IPv4 prefix configured on TUN")
 	mtu := flag.Int("mtu", envInt("L2TP_MTU", 1400), "TUN and PPP routing MTU")
+	debug := flag.Bool("debug", envBool("L2TP_DEBUG", false), "enable protocol debug tracing")
 	flag.Parse()
 	password := os.Getenv("L2TP_PASSWORD")
 	if password == "" {
@@ -56,7 +57,11 @@ func main() {
 	default:
 		log.Fatalf("unsupported authentication method %q; use mschapv2 or pap", *authMethod)
 	}
-	s, err := server.Listen(*listen, server.Config{HostName: *hostname, PPP: pppConfig})
+	serverConfig := server.Config{HostName: *hostname, PPP: pppConfig}
+	if *debug {
+		serverConfig.Debugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
+	}
+	s, err := server.Listen(*listen, serverConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -103,6 +108,9 @@ func main() {
 		defer cleanup(context.Background())
 	}
 	log.Printf("L2TP listener started on %s (unencrypted; IPsec transport is not implemented yet)", s.Conn.LocalAddr())
+	if *debug {
+		log.Printf("DEBUG protocol tracing enabled")
+	}
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- s.Serve(ctx) }()
 	if router == nil {
