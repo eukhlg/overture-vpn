@@ -146,6 +146,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("TUN router stopped: %v", err)
 		}
+		if err := <-serverDone; err != nil {
+			log.Fatalf("L2TP server stopped: %v", err)
+		}
 	}
 }
 

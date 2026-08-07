@@ -37,6 +37,12 @@ masquerades the configured client subnet through the interface selected by the
 container's IPv4 default route. `L2TP_NAT_INTERFACE` remains available as an
 explicit override.
 
+During a normal Compose restart or stop, the server sends `StopCCN` to every
+active tunnel before closing UDP. Clients configured for automatic reconnect
+can therefore start a fresh tunnel promptly. An ungraceful process kill, host
+failure, or lost network cannot send this notification, so recovery time then
+depends on the client's own dead-peer timeout.
+
 Stop and remove it with:
 
 ```sh
