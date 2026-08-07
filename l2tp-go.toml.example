@@ -1,0 +1,35 @@
+[server]
+listen = ":1701"
+hostname = "l2tp-go"
+debug = false
+
+[authentication]
+method = "mschapv2"
+
+[[authentication.users]]
+username = "vpn"
+password = "replace-me"
+
+# Add more [[authentication.users]] blocks for additional accounts.
+
+[network]
+subnet = "10.0.0.0/24"
+server_address = "1"
+client_pool_start = "2"
+client_pool_size = 50
+dns = "1.1.1.1"
+mtu = 1400
+
+[tun]
+enabled = true
+name = "l2tp0"
+
+[nat]
+enabled = true
+# Leave empty to discover the interface from the default IPv4 route.
+interface = ""
+
+[limits]
+sessions = 50
+sessions_per_tunnel = 1
+sessions_per_user = 1
