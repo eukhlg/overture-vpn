@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"l2tp-go/protocol/ppp"
@@ -15,16 +16,16 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", ":1701", "UDP address on which to listen")
-	hostname := flag.String("hostname", "l2tp-go", "L2TP host name advertised to peers")
-	username := flag.String("username", "vpn", "PAP username")
-	serverIP := flag.String("server-ip", "10.0.0.1", "PPP server IPv4 address")
-	clientIP := flag.String("client-ip", "10.0.0.2", "PPP client IPv4 address")
-	dns := flag.String("dns", "1.1.1.1", "DNS server offered through IPCP")
-	enableTUN := flag.Bool("tun", false, "create and configure a TUN interface for IPv4 routing")
-	tunName := flag.String("tun-name", "", "requested TUN name (empty selects automatically)")
-	tunPrefix := flag.String("tun-prefix", "10.0.0.1/24", "IPv4 prefix configured on TUN")
-	mtu := flag.Int("mtu", 1400, "TUN and PPP routing MTU")
+	listen := flag.String("listen", envString("L2TP_LISTEN", ":1701"), "UDP address on which to listen")
+	hostname := flag.String("hostname", envString("L2TP_HOSTNAME", "l2tp-go"), "L2TP host name advertised to peers")
+	username := flag.String("username", envString("L2TP_USERNAME", "vpn"), "PAP username")
+	serverIP := flag.String("server-ip", envString("L2TP_SERVER_IP", "10.0.0.1"), "PPP server IPv4 address")
+	clientIP := flag.String("client-ip", envString("L2TP_CLIENT_IP", "10.0.0.2"), "PPP client IPv4 address")
+	dns := flag.String("dns", envString("L2TP_DNS", "1.1.1.1"), "DNS server offered through IPCP")
+	enableTUN := flag.Bool("tun", envBool("L2TP_TUN_ENABLED", false), "create and configure a TUN interface for IPv4 routing")
+	tunName := flag.String("tun-name", envString("L2TP_TUN_NAME", ""), "requested TUN name (empty selects automatically)")
+	tunPrefix := flag.String("tun-prefix", envString("L2TP_TUN_PREFIX", "10.0.0.1/24"), "IPv4 prefix configured on TUN")
+	mtu := flag.Int("mtu", envInt("L2TP_MTU", 1400), "TUN and PPP routing MTU")
 	flag.Parse()
 	password := os.Getenv("L2TP_PASSWORD")
 	if password == "" {
@@ -37,9 +38,13 @@ func main() {
 		}
 		return address
 	}
+	serverAddress, clientAddress := parseIP(*serverIP), parseIP(*clientIP)
+	if serverAddress == clientAddress {
+		log.Fatal("server-ip and client-ip must be different")
+	}
 
 	s, err := server.Listen(*listen, server.Config{HostName: *hostname, PPP: &ppp.SessionConfig{
-		ServerAddress: parseIP(*serverIP), ClientAddress: parseIP(*clientIP), PrimaryDNS: parseIP(*dns),
+		ServerAddress: serverAddress, ClientAddress: clientAddress, PrimaryDNS: parseIP(*dns),
 		Authenticate: ppp.StaticCredentials(*username, password),
 	}})
 	if err != nil {
@@ -61,6 +66,9 @@ func main() {
 		prefix, err := netip.ParsePrefix(*tunPrefix)
 		if err != nil {
 			log.Fatalf("invalid TUN prefix %q: %v", *tunPrefix, err)
+		}
+		if !prefix.Contains(serverAddress) || !prefix.Contains(clientAddress) {
+			log.Fatalf("TUN prefix %s must contain server %s and client %s", prefix, serverAddress, clientAddress)
 		}
 		cleanup, err = tun.Configure(context.Background(), device, tun.LinkConfig{Address: prefix, MTU: *mtu}, nil)
 		if err != nil {
@@ -107,4 +115,35 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+}
+
+func envString(name, fallback string) string {
+	if value, ok := os.LookupEnv(name); ok {
+		return value
+	}
+	return fallback
+}
+
+func envBool(name string, fallback bool) bool {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Fatalf("%s must be a boolean: %v", name, err)
+	}
+	return parsed
+}
+
+func envInt(name string, fallback int) int {
+	value, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Fatalf("%s must be an integer: %v", name, err)
+	}
+	return parsed
 }
