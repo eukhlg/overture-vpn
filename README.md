@@ -87,6 +87,7 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 | `L2TP_PASSWORD` | required | PAP password |
 | `L2TP_USERNAME` | `vpn` | PPP username |
 | `L2TP_AUTH` | `mschapv2` | PPP authentication: `mschapv2` or `pap` |
+| `L2TP_DEBUG` | `false` | Enable sanitized protocol tracing |
 | `L2TP_LISTEN` | `:1701` | UDP listen address |
 | `L2TP_HOSTNAME` | `l2tp-go` | Advertised L2TP host name |
 | `L2TP_SERVER_IP` | `10.0.0.1` | Server-side PPP address |
@@ -123,6 +124,23 @@ docker inspect --format '{{.State.ExitCode}} {{.State.Error}}' l2tp-go-l2tp-1
 IPv6 and packets without an active PPP destination may appear on TUN. They are
 dropped without stopping the server. A fatal listener or TUN error is logged
 with the component name before the process exits.
+
+For connection negotiation failures, enable tracing in `.env`:
+
+```env
+L2TP_DEBUG=true
+```
+
+Then recreate the container and follow its output:
+
+```sh
+docker compose up -d --force-recreate
+docker compose logs -f --tail=200 l2tp
+```
+
+Debug mode records peer addresses, message types, tunnel/session identifiers,
+sequence numbers, PPP protocols and phase transitions. It does not record
+passwords, authentication responses, or packet payloads.
 
 ## Tests
 
