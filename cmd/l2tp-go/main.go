@@ -46,7 +46,7 @@ func main() {
 		log.Fatal("server-ip and client-ip must be different")
 	}
 
-	pppConfig := &ppp.SessionConfig{ServerAddress: serverAddress, ClientAddress: clientAddress, PrimaryDNS: parseIP(*dns)}
+	pppConfig := &ppp.SessionConfig{ServerAddress: serverAddress, ClientAddress: clientAddress, PrimaryDNS: parseIP(*dns), AuthenticatorName: *hostname}
 	switch strings.ToLower(*authMethod) {
 	case "mschapv2", "ms-chap-v2":
 		pppConfig.Authentication = ppp.AuthenticationMSCHAPv2
