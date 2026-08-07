@@ -84,10 +84,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer s.Close()
-	s.HandleData = func(_ context.Context, frame server.DataFrame) error {
-		log.Printf("PPP frame: peer=%s tunnel=%d session=%d protocol=%#x bytes=%d", frame.Peer, frame.TunnelID, frame.Session.LocalID, frame.PPP.Protocol, len(frame.PPP.Payload))
-		return nil
-	}
 	var router *tun.Router
 	var cleanup func(context.Context) error
 	if resolved.TUN.Enabled {
