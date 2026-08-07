@@ -1,2 +1,3 @@
 .env
 /l2tp-go
+/l2tp-go.toml

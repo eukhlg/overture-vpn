@@ -9,7 +9,8 @@ MS-CHAPv2 is vulnerable to offline password attacks; all user traffic remains
 unencrypted. Use this release only on a trusted test network or behind another
 secure transport.
 
-The current release supports one connected client using a fixed IPv4 address.
+The current release supports multiple users and automatically leases client
+addresses from a configured IPv4 pool.
 
 ## Docker Compose
 
@@ -42,6 +43,19 @@ Stop and remove it with:
 docker compose down
 ```
 
+To use a TOML file instead of `.env`, copy the complete example, edit the
+passwords, protect the file, and start Compose with its override:
+
+```sh
+cp l2tp-go.toml.example l2tp-go.toml
+chmod 600 l2tp-go.toml
+docker compose -f docker-compose.yml -f docker-compose.toml.yml up --build -d
+```
+
+The override mounts `l2tp-go.toml` read-only at
+`/etc/l2tp-go/server.toml`. Docker NAT uses the resolved `[network]` and
+`[nat]` values from that same file.
+
 ## Run with TUN routing
 
 Build the server:
@@ -50,8 +64,8 @@ Build the server:
 go build -o l2tp-go ./cmd/l2tp-go
 ```
 
-All settings may be supplied through environment variables. Command-line flags
-remain available and take precedence over environment defaults.
+Settings may be supplied through TOML, environment variables, or command-line
+flags. Precedence is: built-in defaults, TOML, environment, then flags.
 
 ```sh
 export L2TP_PASSWORD='replace-me'
@@ -84,6 +98,33 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 
 ## Configuration
 
+The recommended starting point is [l2tp-go.toml.example](l2tp-go.toml.example).
+Run it natively with:
+
+```sh
+sudo ./l2tp-go --config ./l2tp-go.toml
+```
+
+The configuration is strict: unknown TOML keys and invalid values stop startup
+with a descriptive error. User credentials are ordinary TOML values for now:
+
+```toml
+[authentication]
+method = "mschapv2"
+
+[[authentication.users]]
+username = "alice"
+password = "replace-me"
+
+[[authentication.users]]
+username = "bob"
+password = "replace-me-too"
+```
+
+Keep the real file out of source control and readable only by its owner. The
+existing environment variables remain supported for compatibility and for
+temporary overrides:
+
 | Environment variable | Default | Purpose |
 |---|---:|---|
 | `L2TP_PASSWORD` | required unless `L2TP_USERS` is set | Password for the legacy single user |
@@ -101,9 +142,9 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 | `L2TP_TUN_ENABLED` | `false` | Enable native TUN routing |
 | `L2TP_TUN_NAME` | automatic | Requested TUN interface name |
 | `L2TP_MTU` | `1400` | TUN MTU |
-| `L2TP_NAT_ENABLED` | `true` in Docker | Enable container NAT |
+| `L2TP_NAT_ENABLED` | `true` | Enable container NAT |
 | `L2TP_NAT_INTERFACE` | automatic | Docker outbound-interface override |
-| `L2TP_MAX_SESSIONS` | pool size | Global simultaneous-session limit |
+| `L2TP_MAX_SESSIONS` | `50` | Global simultaneous-session limit |
 | `L2TP_MAX_SESSIONS_PER_TUNNEL` | `1` | Simultaneous sessions in one L2TP tunnel |
 | `L2TP_MAX_SESSIONS_PER_USER` | `1` | Authenticated sessions for one username |
 

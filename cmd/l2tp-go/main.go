@@ -17,31 +17,38 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", envString("L2TP_LISTEN", ":1701"), "UDP address on which to listen")
-	hostname := flag.String("hostname", envString("L2TP_HOSTNAME", "l2tp-go"), "L2TP host name advertised to peers")
-	username := flag.String("username", envString("L2TP_USERNAME", "vpn"), "PPP username")
-	authMethod := flag.String("auth", envString("L2TP_AUTH", "mschapv2"), "PPP authentication method: mschapv2 or pap")
-	dns := flag.String("dns", envString("L2TP_DNS", "1.1.1.1"), "DNS server offered through IPCP")
-	enableTUN := flag.Bool("tun", envBool("L2TP_TUN_ENABLED", false), "create and configure a TUN interface for IPv4 routing")
-	tunName := flag.String("tun-name", envString("L2TP_TUN_NAME", ""), "requested TUN name (empty selects automatically)")
-	mtu := flag.Int("mtu", envInt("L2TP_MTU", 1400), "TUN and PPP routing MTU")
-	debug := flag.Bool("debug", envBool("L2TP_DEBUG", false), "enable protocol debug tracing")
+	configPath := configPathFromArgs(os.Args[1:])
+	resolved, err := loadConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	flag.StringVar(&configPath, "config", configPath, "TOML configuration file")
+	flag.StringVar(&resolved.Server.Listen, "listen", resolved.Server.Listen, "UDP address on which to listen")
+	flag.StringVar(&resolved.Server.Hostname, "hostname", resolved.Server.Hostname, "L2TP host name advertised to peers")
+	legacyUsername := flag.String("username", "", "override the username when exactly one PPP user is configured")
+	flag.StringVar(&resolved.Authentication.Method, "auth", resolved.Authentication.Method, "PPP authentication method: mschapv2 or pap")
+	flag.StringVar(&resolved.Network.DNS, "dns", resolved.Network.DNS, "DNS server offered through IPCP")
+	flag.BoolVar(&resolved.TUN.Enabled, "tun", resolved.TUN.Enabled, "create and configure a TUN interface for IPv4 routing")
+	flag.StringVar(&resolved.TUN.Name, "tun-name", resolved.TUN.Name, "requested TUN name (empty selects automatically)")
+	flag.IntVar(&resolved.Network.MTU, "mtu", resolved.Network.MTU, "TUN and PPP routing MTU")
+	flag.BoolVar(&resolved.Server.Debug, "debug", resolved.Server.Debug, "enable protocol debug tracing")
+	printValue := flag.String("print-config-value", "", "print one resolved value and exit")
 	flag.Parse()
-	usersValue := os.Getenv("L2TP_USERS")
-	if usersValue == "" {
-		password := os.Getenv("L2TP_PASSWORD")
-		if password == "" {
-			log.Fatal("L2TP_USERS or L2TP_PASSWORD must be set")
+	if *legacyUsername != "" {
+		if len(resolved.Authentication.Users) != 1 {
+			log.Fatal("-username requires exactly one configured authentication user")
 		}
-		usersValue = *username + "=" + password
+		resolved.Authentication.Users[0].Username = *legacyUsername
 	}
-	users, err := parseUsers(usersValue)
+	network, users, err := resolved.validate()
 	if err != nil {
 		log.Fatal(err)
 	}
-	network, err := loadNetworkConfig()
-	if err != nil {
-		log.Fatal(err)
+	if *printValue != "" {
+		if err := printResolvedValue(*printValue, resolved, network); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	parseIP := func(value string) netip.Addr {
 		address, err := netip.ParseAddr(value)
@@ -54,8 +61,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	pppConfig := &ppp.SessionConfig{ServerAddress: network.Server, ClientAddress: network.PoolStart, PrimaryDNS: parseIP(*dns), AuthenticatorName: *hostname}
-	switch strings.ToLower(*authMethod) {
+	pppConfig := &ppp.SessionConfig{ServerAddress: network.Server, ClientAddress: network.PoolStart, PrimaryDNS: parseIP(resolved.Network.DNS), AuthenticatorName: resolved.Server.Hostname}
+	switch strings.ToLower(resolved.Authentication.Method) {
 	case "mschapv2", "ms-chap-v2":
 		pppConfig.Authentication = ppp.AuthenticationMSCHAPv2
 		pppConfig.LookupPassword = ppp.Passwords(users)
@@ -63,16 +70,16 @@ func main() {
 		pppConfig.Authentication = ppp.AuthenticationPAP
 		pppConfig.Authenticate = ppp.Credentials(users)
 	default:
-		log.Fatalf("unsupported authentication method %q; use mschapv2 or pap", *authMethod)
+		log.Fatalf("unsupported authentication method %q; use mschapv2 or pap", resolved.Authentication.Method)
 	}
-	serverConfig := server.Config{HostName: *hostname, PPP: pppConfig, AddressPool: pool, MaxSessions: envInt("L2TP_MAX_SESSIONS", network.PoolSize), MaxSessionsPerTunnel: envInt("L2TP_MAX_SESSIONS_PER_TUNNEL", 1), MaxSessionsPerUser: envInt("L2TP_MAX_SESSIONS_PER_USER", 1)}
+	serverConfig := server.Config{HostName: resolved.Server.Hostname, PPP: pppConfig, AddressPool: pool, MaxSessions: resolved.Limits.Sessions, MaxSessionsPerTunnel: resolved.Limits.SessionsPerTunnel, MaxSessionsPerUser: resolved.Limits.SessionsPerUser}
 	if serverConfig.MaxSessions < 0 || serverConfig.MaxSessionsPerTunnel < 0 || serverConfig.MaxSessionsPerUser < 0 {
 		log.Fatal("session limits must be zero (unlimited) or positive")
 	}
-	if *debug {
+	if resolved.Server.Debug {
 		serverConfig.Debugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
 	}
-	s, err := server.Listen(*listen, serverConfig)
+	s, err := server.Listen(resolved.Server.Listen, serverConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -83,14 +90,14 @@ func main() {
 	}
 	var router *tun.Router
 	var cleanup func(context.Context) error
-	if *enableTUN {
-		device, err := tun.Open(tun.Config{Name: *tunName})
+	if resolved.TUN.Enabled {
+		device, err := tun.Open(tun.Config{Name: resolved.TUN.Name})
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer device.Close()
 		prefix := network.TUNPrefix
-		cleanup, err = tun.Configure(context.Background(), device, tun.LinkConfig{Address: prefix, MTU: *mtu}, nil)
+		cleanup, err = tun.Configure(context.Background(), device, tun.LinkConfig{Address: prefix, MTU: resolved.Network.MTU}, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -119,7 +126,7 @@ func main() {
 	}
 	log.Printf("L2TP listener started on %s (unencrypted; IPsec transport is not implemented yet)", s.Conn.LocalAddr())
 	log.Printf("Client pool ready: subnet=%s server=%s range=%s-%s users=%d limits=%d/%d/%d", network.Subnet, network.Server, network.PoolStart, network.PoolEnd, len(users), serverConfig.MaxSessions, serverConfig.MaxSessionsPerTunnel, serverConfig.MaxSessionsPerUser)
-	if *debug {
+	if resolved.Server.Debug {
 		log.Printf("DEBUG protocol tracing enabled")
 	}
 	serverDone := make(chan error, 1)

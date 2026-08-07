@@ -1,9 +1,17 @@
 #!/bin/sh
 set -eu
 
-if [ "${L2TP_NAT_ENABLED:-true}" = "true" ]; then
-  client_subnet="${L2TP_CLIENT_SUBNET:-10.0.0.0/24}"
-  outbound_interface="${L2TP_NAT_INTERFACE:-}"
+config_value() {
+  if [ -n "${L2TP_CONFIG:-}" ]; then
+    /usr/local/bin/l2tp-go --config "$L2TP_CONFIG" --print-config-value "$1"
+  else
+    /usr/local/bin/l2tp-go --print-config-value "$1"
+  fi
+}
+
+if [ "$(config_value nat.enabled)" = "true" ]; then
+  client_subnet="$(config_value network.subnet)"
+  outbound_interface="$(config_value nat.interface)"
   if [ -z "$outbound_interface" ]; then
     outbound_interface="$(ip -4 route show default | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
   fi
@@ -21,4 +29,7 @@ if [ "${L2TP_NAT_ENABLED:-true}" = "true" ]; then
   echo "L2TP NAT enabled: $client_subnet via $outbound_interface"
 fi
 
+if [ -n "${L2TP_CONFIG:-}" ]; then
+  exec /usr/local/bin/l2tp-go --config "$L2TP_CONFIG" "$@"
+fi
 exec /usr/local/bin/l2tp-go "$@"
