@@ -13,6 +13,7 @@ services:
     environment:
       L2TP_PASSWORD: ${L2TP_PASSWORD:?Set L2TP_PASSWORD before starting}
       L2TP_USERNAME: ${L2TP_USERNAME:-vpn}
+      L2TP_AUTH: ${L2TP_AUTH:-mschapv2}
       L2TP_LISTEN: ":1701"
       L2TP_HOSTNAME: ${L2TP_HOSTNAME:-l2tp-go}
       L2TP_SERVER_IP: ${L2TP_SERVER_IP:-10.0.0.1}
