@@ -1,12 +1,13 @@
 # l2tp-go
 
 A lightweight Go L2TPv2 server under active development. The current server
-supports raw (unencrypted) L2TP, PPP LCP, PAP authentication, IPCP, IPv4, and a
-native TUN data path on Linux and macOS.
+supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
+IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-IPsec is not implemented yet. PAP credentials and all traffic are exposed on
-the network when the server is used without IPsec. Use this release only on a
-trusted test network or behind another secure transport.
+IPsec is not implemented yet. PAP sends credentials without encryption, and
+MS-CHAPv2 is vulnerable to offline password attacks; all user traffic remains
+unencrypted. Use this release only on a trusted test network or behind another
+secure transport.
 
 The current release supports one connected client using a fixed IPv4 address.
 
@@ -84,7 +85,8 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 | Environment variable | Default | Purpose |
 |---|---:|---|
 | `L2TP_PASSWORD` | required | PAP password |
-| `L2TP_USERNAME` | `vpn` | PAP username |
+| `L2TP_USERNAME` | `vpn` | PPP username |
+| `L2TP_AUTH` | `mschapv2` | PPP authentication: `mschapv2` or `pap` |
 | `L2TP_LISTEN` | `:1701` | UDP listen address |
 | `L2TP_HOSTNAME` | `l2tp-go` | Advertised L2TP host name |
 | `L2TP_SERVER_IP` | `10.0.0.1` | Server-side PPP address |
@@ -100,10 +102,10 @@ entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
 
 ## Client settings
 
-Configure a client for L2TP without IPsec, with PAP authentication, UDP port
-1701, and the username/password from the environment. Many operating-system
+Configure a client for L2TP without IPsec, with MS-CHAPv2 authentication (or
+PAP when `L2TP_AUTH=pap`), UDP port 1701, and the username/password from the environment. Many operating-system
 VPN user interfaces require IPsec for L2TP and will not offer raw L2TP; use a
-client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP and PAP.
+client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP.
 
 Successful startup does not prove that UDP 1701 is reachable from outside the
 host. Verify host and cloud firewalls separately.

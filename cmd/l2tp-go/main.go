@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"l2tp-go/protocol/ppp"
@@ -18,7 +19,8 @@ import (
 func main() {
 	listen := flag.String("listen", envString("L2TP_LISTEN", ":1701"), "UDP address on which to listen")
 	hostname := flag.String("hostname", envString("L2TP_HOSTNAME", "l2tp-go"), "L2TP host name advertised to peers")
-	username := flag.String("username", envString("L2TP_USERNAME", "vpn"), "PAP username")
+	username := flag.String("username", envString("L2TP_USERNAME", "vpn"), "PPP username")
+	authMethod := flag.String("auth", envString("L2TP_AUTH", "mschapv2"), "PPP authentication method: mschapv2 or pap")
 	serverIP := flag.String("server-ip", envString("L2TP_SERVER_IP", "10.0.0.1"), "PPP server IPv4 address")
 	clientIP := flag.String("client-ip", envString("L2TP_CLIENT_IP", "10.0.0.2"), "PPP client IPv4 address")
 	dns := flag.String("dns", envString("L2TP_DNS", "1.1.1.1"), "DNS server offered through IPCP")
@@ -43,10 +45,18 @@ func main() {
 		log.Fatal("server-ip and client-ip must be different")
 	}
 
-	s, err := server.Listen(*listen, server.Config{HostName: *hostname, PPP: &ppp.SessionConfig{
-		ServerAddress: serverAddress, ClientAddress: clientAddress, PrimaryDNS: parseIP(*dns),
-		Authenticate: ppp.StaticCredentials(*username, password),
-	}})
+	pppConfig := &ppp.SessionConfig{ServerAddress: serverAddress, ClientAddress: clientAddress, PrimaryDNS: parseIP(*dns)}
+	switch strings.ToLower(*authMethod) {
+	case "mschapv2", "ms-chap-v2":
+		pppConfig.Authentication = ppp.AuthenticationMSCHAPv2
+		pppConfig.LookupPassword = ppp.StaticPassword(*username, password)
+	case "pap":
+		pppConfig.Authentication = ppp.AuthenticationPAP
+		pppConfig.Authenticate = ppp.StaticCredentials(*username, password)
+	default:
+		log.Fatalf("unsupported authentication method %q; use mschapv2 or pap", *authMethod)
+	}
+	s, err := server.Listen(*listen, server.Config{HostName: *hostname, PPP: pppConfig})
 	if err != nil {
 		log.Fatal(err)
 	}
