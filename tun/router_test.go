@@ -78,6 +78,32 @@ func TestRouterRunStopsWithContext(t *testing.T) {
 	}
 }
 
+func TestRouterRunDropsUnsupportedPackets(t *testing.T) {
+	device := newMemoryDevice()
+	router, _ := NewRouter(device)
+	clientPacket := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	delivered := make(chan []byte, 1)
+	if err := router.RouteIPv4(context.Background(), server.DataFrame{IPv4: clientPacket}, func(packet []byte) error {
+		delivered <- append([]byte(nil), packet...)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- router.Run(ctx) }()
+	device.reads <- []byte{0x60, 0, 0, 0} // IPv6 must be ignored, not fatal.
+	returnPacket := ipv4Packet([4]byte{8, 8, 8, 8}, [4]byte{10, 0, 0, 2})
+	device.reads <- returnPacket
+	if got := <-delivered; !bytes.Equal(got, returnPacket) {
+		t.Fatalf("delivered=%x", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPacketAddressesRejectsMalformed(t *testing.T) {
 	if _, _, err := packetAddresses([]byte{0x45}); err != ErrInvalidPacket {
 		t.Fatalf("unexpected error: %v", err)

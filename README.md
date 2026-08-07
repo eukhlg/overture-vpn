@@ -108,6 +108,20 @@ client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP and PAP.
 Successful startup does not prove that UDP 1701 is reachable from outside the
 host. Verify host and cloud firewalls separately.
 
+## Troubleshooting
+
+If Compose restarts the container, inspect both its status and previous logs:
+
+```sh
+docker compose ps
+docker compose logs --tail=200 l2tp
+docker inspect --format '{{.State.ExitCode}} {{.State.Error}}' l2tp-go-l2tp-1
+```
+
+IPv6 and packets without an active PPP destination may appear on TUN. They are
+dropped without stopping the server. A fatal listener or TUN error is logged
+with the component name before the process exits.
+
 ## Tests
 
 ```sh

@@ -107,12 +107,12 @@ func main() {
 	case err := <-serverDone:
 		stop()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("L2TP server stopped: %v", err)
 		}
 	case err := <-routerDone:
 		stop()
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("TUN router stopped: %v", err)
 		}
 	}
 }

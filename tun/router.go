@@ -64,7 +64,12 @@ func (r *Router) Run(ctx context.Context) error {
 			return err
 		}
 		packet := append([]byte(nil), buffer[:n]...)
-		if err := r.dispatch(packet); err != nil && !errors.Is(err, ErrNoRoute) {
+		if err := r.dispatch(packet); err != nil {
+			// TUN interfaces can receive IPv6 and transient packets for which no
+			// PPP route exists. Neither condition is fatal to the routing loop.
+			if errors.Is(err, ErrInvalidPacket) || errors.Is(err, ErrNoRoute) {
+				continue
+			}
 			return err
 		}
 	}
