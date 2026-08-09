@@ -11,8 +11,15 @@ secure transport.
 
 The in-progress IPsec foundation includes strict IKEv1 codecs and tested
 Phase 1/ESP transform validation, RFC 2409 PSK key derivation, and AES-CBC or
-3DES-CBC primitives. These components are not wired to UDP/500, NAT-T, or ESP
-yet, so they do not make the running server encrypted.
+3DES-CBC primitives. These components are not wired into the production
+command, NAT-T, or ESP yet, so they do not make the running server encrypted.
+
+The control-plane package also implements a PSK Main Mode responder, Quick
+Mode ESP transport-SA negotiation, DH groups 2 and 14, directional KEYMAT,
+retransmission handling, SA limits/expiry, and a reusable UDP IKE listener.
+The production command intentionally does not start that listener until the
+ESP transport data path is available; the packaged server therefore remains
+raw L2TP at this stage.
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
