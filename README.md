@@ -9,6 +9,11 @@ MS-CHAPv2 is vulnerable to offline password attacks; all user traffic remains
 unencrypted. Use this release only on a trusted test network or behind another
 secure transport.
 
+The in-progress IPsec foundation includes strict IKEv1 codecs and tested
+Phase 1/ESP transform validation, RFC 2409 PSK key derivation, and AES-CBC or
+3DES-CBC primitives. These components are not wired to UDP/500, NAT-T, or ESP
+yet, so they do not make the running server encrypted.
+
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
 
