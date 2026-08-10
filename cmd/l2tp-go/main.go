@@ -117,24 +117,33 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	var ipsec *ipsecRuntime
+	var ipsecDone <-chan error
+	if resolved.IPsec.Enabled {
+		ipsec, err = startIPsec(ctx, resolved, s)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer ipsec.Close()
+		ipsecDone = ipsec.done
+		log.Printf("IKEv1 listener started on %s; raw ESP transport enabled for server ID %s", resolved.IPsec.IKEListen, resolved.IPsec.ServerID)
+	}
 	if cleanup != nil {
 		defer cleanup(context.Background())
 	}
-	log.Printf("L2TP listener started on %s (unencrypted; IPsec transport is not implemented yet)", s.Conn.LocalAddr())
+	log.Printf("L2TP listener started on %s (raw L2TP)", s.Conn.LocalAddr())
 	log.Printf("Client pool ready: subnet=%s server=%s range=%s-%s users=%d limits=%d/%d/%d", network.Subnet, network.Server, network.PoolStart, network.PoolEnd, len(users), serverConfig.MaxSessions, serverConfig.MaxSessionsPerTunnel, serverConfig.MaxSessionsPerUser)
 	if resolved.Server.Debug {
 		log.Printf("DEBUG protocol tracing enabled")
 	}
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- s.Serve(ctx) }()
-	if router == nil {
-		if err := <-serverDone; err != nil {
-			log.Fatal(err)
-		}
-		return
+	var routerDone <-chan error
+	if router != nil {
+		done := make(chan error, 1)
+		routerDone = done
+		go func() { done <- router.Run(ctx) }()
 	}
-	routerDone := make(chan error, 1)
-	go func() { routerDone <- router.Run(ctx) }()
 	select {
 	case err := <-serverDone:
 		stop()
@@ -146,8 +155,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("TUN router stopped: %v", err)
 		}
-		if err := <-serverDone; err != nil {
-			log.Fatalf("L2TP server stopped: %v", err)
+	case err := <-ipsecDone:
+		stop()
+		if err != nil {
+			log.Fatalf("IPsec server stopped: %v", err)
 		}
 	}
 }

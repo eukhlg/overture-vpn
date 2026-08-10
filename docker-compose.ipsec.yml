@@ -1,0 +1,10 @@
+services:
+  l2tp:
+    # Raw IP protocol 50 cannot be published through Docker's ports mapping.
+    # Host networking is therefore required for experimental raw ESP mode.
+    network_mode: host
+    ports: !reset []
+    cap_add:
+      - NET_RAW
+    environment:
+      L2TP_IPSEC_ENABLED: "true"

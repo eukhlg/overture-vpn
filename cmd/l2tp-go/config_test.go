@@ -17,8 +17,24 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME",
 		"L2TP_NAT_ENABLED", "L2TP_NAT_INTERFACE", "L2TP_MAX_SESSIONS",
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
+		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
+		"L2TP_IPSEC_PSK", "L2TP_IPSEC_SERVER_ID", "L2TP_IPSEC_MAX_SAS",
 	} {
 		t.Setenv(name, "")
+	}
+}
+
+func TestIPsecConfigRequiresPSKAndIPv4Identity(t *testing.T) {
+	clearConfigEnvironment(t)
+	c := defaultConfig()
+	c.Authentication.Users = []userConfig{{Username: "vpn", Password: "secret"}}
+	c.IPsec.Enabled = true
+	if _, _, err := c.validate(); err == nil {
+		t.Fatal("enabled IPsec accepted without PSK and identity")
+	}
+	c.IPsec.PreSharedKey, c.IPsec.ServerID = "ipsec-secret", "203.0.113.10"
+	if _, _, err := c.validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 

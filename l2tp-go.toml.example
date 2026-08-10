@@ -29,6 +29,15 @@ enabled = true
 # Leave empty to discover the interface from the default IPv4 route.
 interface = ""
 
+[ipsec]
+# Experimental IKEv1 + raw ESP transport mode. Requires CAP_NET_RAW.
+enabled = false
+ike_listen = ":500"
+esp_listen = "0.0.0.0"
+pre_shared_key = "change-this-ipsec-key"
+server_id = "203.0.113.10"
+max_sas = 1024
+
 [limits]
 sessions = 50
 sessions_per_tunnel = 1

@@ -40,6 +40,14 @@ type appConfig struct {
 		Enabled   bool   `toml:"enabled"`
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
+	IPsec struct {
+		Enabled      bool   `toml:"enabled"`
+		IKEListen    string `toml:"ike_listen"`
+		ESPListen    string `toml:"esp_listen"`
+		PreSharedKey string `toml:"pre_shared_key"`
+		ServerID     string `toml:"server_id"`
+		MaxSAs       int    `toml:"max_sas"`
+	} `toml:"ipsec"`
 	Limits struct {
 		Sessions          int `toml:"sessions"`
 		SessionsPerTunnel int `toml:"sessions_per_tunnel"`
@@ -61,6 +69,7 @@ func defaultConfig() appConfig {
 	c.Network.ClientPoolSize, c.Network.DNS, c.Network.MTU = 50, "1.1.1.1", 1400
 	c.TUN.Name = ""
 	c.NAT.Enabled = true
+	c.IPsec.IKEListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", "0.0.0.0", 1024
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	return c
 }
@@ -130,6 +139,16 @@ func applyEnvironment(c *appConfig) error {
 		return err
 	}
 	overrideString("L2TP_NAT_INTERFACE", &c.NAT.Interface)
+	if err := overrideBool("L2TP_IPSEC_ENABLED", &c.IPsec.Enabled); err != nil {
+		return err
+	}
+	overrideString("L2TP_IPSEC_IKE_LISTEN", &c.IPsec.IKEListen)
+	overrideString("L2TP_IPSEC_ESP_LISTEN", &c.IPsec.ESPListen)
+	overrideString("L2TP_IPSEC_PSK", &c.IPsec.PreSharedKey)
+	overrideString("L2TP_IPSEC_SERVER_ID", &c.IPsec.ServerID)
+	if err := overrideInt("L2TP_IPSEC_MAX_SAS", &c.IPsec.MaxSAs); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_MAX_SESSIONS", &c.Limits.Sessions); err != nil {
 		return err
 	}
@@ -158,6 +177,17 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.Network.MTU <= 0 || c.Limits.Sessions < 0 || c.Limits.SessionsPerTunnel < 0 || c.Limits.SessionsPerUser < 0 {
 		return networkConfig{}, nil, fmt.Errorf("MTU must be positive and session limits cannot be negative")
+	}
+	if c.IPsec.MaxSAs < 0 {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.max_sas cannot be negative")
+	}
+	if c.IPsec.Enabled {
+		if c.IPsec.PreSharedKey == "" {
+			return networkConfig{}, nil, fmt.Errorf("ipsec.pre_shared_key is required when IPsec is enabled")
+		}
+		if address, err := netip.ParseAddr(c.IPsec.ServerID); err != nil || !address.Is4() {
+			return networkConfig{}, nil, fmt.Errorf("ipsec.server_id must be an IPv4 address when IPsec is enabled")
+		}
 	}
 	network, err := resolveNetwork(c.Network.Subnet, c.Network.ServerAddress, c.Network.ClientPoolStart, c.Network.ClientPoolSize)
 	return network, users, err

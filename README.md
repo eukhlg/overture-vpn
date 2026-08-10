@@ -4,22 +4,12 @@ A lightweight Go L2TPv2 server under active development. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-IPsec is not implemented yet. PAP sends credentials without encryption, and
-MS-CHAPv2 is vulnerable to offline password attacks; all user traffic remains
-unencrypted. Use this release only on a trusted test network or behind another
-secure transport.
-
-The in-progress IPsec foundation includes strict IKEv1 codecs and tested
-Phase 1/ESP transform validation, RFC 2409 PSK key derivation, and AES-CBC or
-3DES-CBC primitives. These components are not wired into the production
-command, NAT-T, or ESP yet, so they do not make the running server encrypted.
-
-The control-plane package also implements a PSK Main Mode responder, Quick
-Mode ESP transport-SA negotiation, DH groups 2 and 14, directional KEYMAT,
-retransmission handling, SA limits/expiry, and a reusable UDP IKE listener.
-The production command intentionally does not start that listener until the
-ESP transport data path is available; the packaged server therefore remains
-raw L2TP at this stage.
+Experimental IKEv1 PSK and raw ESP transport mode can now protect L2TP on
+Linux. It includes Main Mode, Quick Mode, DH2/DH14, AES-CBC or 3DES-CBC,
+HMAC-SHA1-96, anti-replay, and SA limits. It is disabled by default and is not
+yet a production security boundary: NAT detection, IKE fragmentation, DPD,
+rekeying, UDP/4500 migration, and external-client interoperability testing are
+still pending. Raw L2TP remains available for controlled test networks.
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
@@ -43,11 +33,25 @@ docker compose up --build -d
 docker compose logs -f l2tp
 ```
 
-The Compose service publishes UDP 1701, grants only `NET_ADMIN`, mounts
+The default Compose service publishes UDP 1701, grants only `NET_ADMIN`, mounts
 `/dev/net/tun`, enables IPv4 forwarding in the container namespace, and
 masquerades the configured client subnet through the interface selected by the
 container's IPv4 default route. `L2TP_NAT_INTERFACE` remains available as an
 explicit override.
+
+Experimental raw ESP requires Linux host networking because Docker cannot
+publish IP protocol 50 through a UDP/TCP port mapping. Set a real public server
+identity and PSK, then apply the IPsec override:
+
+```sh
+L2TP_IPSEC_PSK='replace-this' \
+L2TP_IPSEC_SERVER_ID='203.0.113.10' \
+docker compose -f docker-compose.yml -f docker-compose.ipsec.yml up --build -d
+```
+
+This override adds `NET_RAW` and removes published ports because host
+networking binds UDP 500, UDP 1701, and raw ESP directly on the Linux host.
+Docker Desktop cannot provide this raw-ESP path.
 
 During a normal Compose restart or stop, the server sends `StopCCN` to every
 active tunnel before closing UDP. Clients configured for automatic reconnect
@@ -165,6 +169,12 @@ temporary overrides:
 | `L2TP_MAX_SESSIONS` | `50` | Global simultaneous-session limit |
 | `L2TP_MAX_SESSIONS_PER_TUNNEL` | `1` | Simultaneous sessions in one L2TP tunnel |
 | `L2TP_MAX_SESSIONS_PER_USER` | `1` | Authenticated sessions for one username |
+| `L2TP_IPSEC_ENABLED` | `false` | Enable experimental IKEv1 and raw ESP transport |
+| `L2TP_IPSEC_IKE_LISTEN` | `:500` | IKEv1 UDP listen address |
+| `L2TP_IPSEC_ESP_LISTEN` | `0.0.0.0` | Raw ESP local IPv4 address |
+| `L2TP_IPSEC_PSK` | empty | IKEv1 pre-shared key |
+| `L2TP_IPSEC_SERVER_ID` | empty | Public IPv4 identity used by IKE |
+| `L2TP_IPSEC_MAX_SAS` | `1024` | Maximum simultaneous Phase 1 SAs |
 
 Both address settings accept a full IPv4 address or a host offset. For example,
 subnet `10.0.0.0/24`, server `1`, start `100`, and limit `50` produce server
