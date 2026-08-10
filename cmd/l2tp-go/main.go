@@ -126,7 +126,7 @@ func main() {
 		}
 		defer ipsec.Close()
 		ipsecDone = ipsec.done
-		log.Printf("IKEv1 listener started on %s; raw ESP transport enabled for server ID %s", resolved.IPsec.IKEListen, resolved.IPsec.ServerID)
+		log.Printf("IKEv1 listeners started on %s and NAT-T %s; raw ESP transport enabled for server ID %s", resolved.IPsec.IKEListen, resolved.IPsec.NATTListen, resolved.IPsec.ServerID)
 	}
 	if cleanup != nil {
 		defer cleanup(context.Background())

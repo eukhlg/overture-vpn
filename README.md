@@ -4,21 +4,24 @@ A lightweight Go L2TPv2 server under active development. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-Experimental IKEv1 PSK and raw ESP transport mode can now protect L2TP on
+Experimental IKEv1 PSK with raw ESP or NAT-T transport can now protect L2TP on
 Linux. It includes Main Mode, Quick Mode, DH2/DH14, AES-CBC or 3DES-CBC,
 HMAC-SHA1-96, anti-replay, Phase 2 lifetimes, IPv4 traffic selectors, and an
 authenticated ESP-to-UDP/1701 handoff into the same L2TP/PPP engine used by
 raw L2TP. It is disabled by default and is not yet a production security
-boundary: IKE fragmentation, DPD, PFS, rekeying, UDP/4500 migration, and
-external-client interoperability testing are still pending. Raw L2TP remains
+boundary: IKE fragmentation, DPD, PFS, rekeying, and broad external-client
+interoperability testing are still pending. Raw L2TP remains
 available for controlled test networks.
 
 The Main Mode responder uses PSK authentication, preserves the initiator's
 exact SA bytes for `HASH_I`/`HASH_R`, accepts paired seconds/kilobytes lifetime
 attributes, requires explicit AES key lengths, caches byte-identical replies
 for retransmissions, and clears sensitive state after failure or expiry. It
-recognizes common Microsoft, DPD, and NAT-T vendor IDs and implements RFC 3947
-NAT-D calculations, but does not advertise or activate NAT-T migration yet.
+recognizes common Microsoft, DPD, and NAT-T vendor IDs. RFC 3947 NAT-D enables
+cookie-authenticated migration to UDP/4500 when either endpoint is behind NAT.
+The shared UDP/4500 listener demultiplexes marker-prefixed IKE, ESP, and NAT
+keepalives according to RFC 3948. Older NAT-T draft IDs are recognized but not
+negotiated.
 
 The Quick Mode responder verifies `HASH(1)`/`HASH(3)`, returns a selector-bound
 `HASH(2)`, negotiates AES/3DES ESP transport mode with HMAC-SHA1-96, derives
@@ -67,7 +70,7 @@ docker compose -f docker-compose.yml -f docker-compose.ipsec.yml up --build -d
 ```
 
 This override adds `NET_RAW` and removes published ports because host
-networking binds UDP 500, UDP 1701, and raw ESP directly on the Linux host.
+networking binds UDP 500, UDP 4500, UDP 1701, and raw ESP directly on the Linux host.
 Docker Desktop cannot provide this raw-ESP path.
 
 During a normal Compose restart or stop, the server sends `StopCCN` to every
@@ -186,8 +189,9 @@ temporary overrides:
 | `L2TP_MAX_SESSIONS` | `50` | Global simultaneous-session limit |
 | `L2TP_MAX_SESSIONS_PER_TUNNEL` | `1` | Simultaneous sessions in one L2TP tunnel |
 | `L2TP_MAX_SESSIONS_PER_USER` | `1` | Authenticated sessions for one username |
-| `L2TP_IPSEC_ENABLED` | `false` | Enable experimental IKEv1 and raw ESP transport |
+| `L2TP_IPSEC_ENABLED` | `false` | Enable experimental IKEv1 with raw ESP and NAT-T transport |
 | `L2TP_IPSEC_IKE_LISTEN` | `:500` | IKEv1 UDP listen address |
+| `L2TP_IPSEC_NATT_LISTEN` | `:4500` | Shared NAT-T IKE/ESP listen address |
 | `L2TP_IPSEC_ESP_LISTEN` | `0.0.0.0` | Raw ESP local IPv4 address |
 | `L2TP_IPSEC_PSK` | empty | IKEv1 pre-shared key |
 | `L2TP_IPSEC_SERVER_ID` | empty | Public IPv4 identity used by IKE |
@@ -202,7 +206,12 @@ accepted as compatibility aliases.
 
 ## Client settings
 
-Configure a client for L2TP without IPsec, with MS-CHAPv2 authentication (or
+For protected operation, configure a client for L2TP/IPsec with a pre-shared
+key, the server's public IPv4 address, and MS-CHAPv2 PPP authentication. Permit
+UDP 500 and UDP 4500 through host and cloud firewalls; permit IP protocol 50
+for clients that do not need NAT traversal.
+
+For raw test operation, configure a client for L2TP without IPsec, with MS-CHAPv2 authentication (or
 PAP when `L2TP_AUTH=pap`), UDP port 1701, and the username/password from the environment. Many operating-system
 VPN user interfaces require IPsec for L2TP and will not offer raw L2TP; use a
 client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP.

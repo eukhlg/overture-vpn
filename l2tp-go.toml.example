@@ -30,9 +30,10 @@ enabled = true
 interface = ""
 
 [ipsec]
-# Experimental IKEv1 + raw ESP transport mode. Requires CAP_NET_RAW.
+# Experimental IKEv1 + raw ESP and NAT-T transport. Requires CAP_NET_RAW.
 enabled = false
 ike_listen = ":500"
+natt_listen = ":4500"
 esp_listen = "0.0.0.0"
 pre_shared_key = "change-this-ipsec-key"
 server_id = "203.0.113.10"

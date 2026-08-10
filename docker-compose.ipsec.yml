@@ -1,7 +1,8 @@
 services:
   l2tp:
     # Raw IP protocol 50 cannot be published through Docker's ports mapping.
-    # Host networking is therefore required for experimental raw ESP mode.
+    # Host networking also lets UDP/500 and the shared UDP/4500 NAT-T socket
+    # use the server's public address directly.
     network_mode: host
     ports: !reset []
     cap_add:

@@ -5,20 +5,26 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 
 	"l2tp-go/protocol/isakmp"
 	"l2tp-go/server"
 )
 
 type ipsecRuntime struct {
-	ike  *server.IKEServer
-	esp  *server.ESPTransportServer
-	done chan error
+	ike       *server.IKEServer
+	esp, natt *server.ESPTransportServer
+	done      chan error
 }
 
 func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server) (*ipsecRuntime, error) {
 	identityIP := net.ParseIP(config.IPsec.ServerID).To4()
-	ike, err := server.ListenIKE(config.IPsec.IKEListen, isakmp.ControlPlaneConfig{PreSharedKey: []byte(config.IPsec.PreSharedKey), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, ProtocolID: 17, Port: 500, Data: identityIP}, MaxPhase1SAs: config.IPsec.MaxSAs})
+	identity, _ := netip.ParseAddr(config.IPsec.ServerID)
+	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte(config.IPsec.PreSharedKey), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, ProtocolID: 17, Port: 500, Data: identityIP}, ResponderEndpoint: netip.AddrPortFrom(identity, 500), MaxPhase1SAs: config.IPsec.MaxSAs})
+	if err != nil {
+		return nil, fmt.Errorf("create IKE control plane: %w", err)
+	}
+	ike, err := server.ListenIKEWithControl(config.IPsec.IKEListen, control)
 	if err != nil {
 		return nil, fmt.Errorf("listen IKE: %w", err)
 	}
@@ -33,14 +39,25 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, fmt.Errorf("listen raw ESP: %w", err)
 	}
-	ike.Established = func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
+	natt, err := server.ListenNATTWithIKE(config.IPsec.NATTListen, bridge, control)
+	if err != nil {
+		_ = raw.Close()
+		_ = ike.Close()
+		return nil, fmt.Errorf("listen NAT-T: %w", err)
+	}
+	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
 		if err := registry.Install(peer, pair); err != nil {
 			log.Printf("IPsec SA install failed: peer=%s error=%v", peer, err)
 			return
 		}
 		log.Printf("IPsec ESP SA established: peer=%s inbound_spi=%08x outbound_spi=%08x", peer, pair.Inbound.SPI, pair.Outbound.SPI)
 	}
+	ike.Established, natt.Established = established, established
 	send := func(datagram server.ESPDatagram) error {
+		if datagram.NATT {
+			_, err := natt.Conn.WriteTo(datagram.Payload, datagram.Peer)
+			return err
+		}
 		peer := datagram.Peer
 		if udp, ok := peer.(*net.UDPAddr); ok {
 			peer = &net.IPAddr{IP: udp.IP}
@@ -48,7 +65,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_, err := raw.Conn.WriteTo(datagram.Payload, peer)
 		return err
 	}
-	raw.HandleResult = func(callbackContext context.Context, result server.ESPBridgeResult) error {
+	handleResult := func(callbackContext context.Context, result server.ESPBridgeResult) error {
 		l2tpResult := result.L2TP
 		if l2tpResult.Opened != nil && l2tpServer.SessionOpened != nil {
 			info := *l2tpResult.Opened
@@ -92,9 +109,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		}
 		return nil
 	}
-	runtime := &ipsecRuntime{ike: ike, esp: raw, done: make(chan error, 2)}
+	raw.HandleResult, natt.HandleResult = handleResult, handleResult
+	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, done: make(chan error, 3)}
 	go func() { runtime.done <- ike.Serve(ctx) }()
 	go func() { runtime.done <- raw.Serve(ctx) }()
+	go func() { runtime.done <- natt.Serve(ctx) }()
 	return runtime, nil
 }
 
@@ -104,4 +123,5 @@ func (r *ipsecRuntime) Close() {
 	}
 	_ = r.ike.Close()
 	_ = r.esp.Close()
+	_ = r.natt.Close()
 }

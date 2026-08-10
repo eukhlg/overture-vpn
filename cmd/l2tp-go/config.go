@@ -43,6 +43,7 @@ type appConfig struct {
 	IPsec struct {
 		Enabled      bool   `toml:"enabled"`
 		IKEListen    string `toml:"ike_listen"`
+		NATTListen   string `toml:"natt_listen"`
 		ESPListen    string `toml:"esp_listen"`
 		PreSharedKey string `toml:"pre_shared_key"`
 		ServerID     string `toml:"server_id"`
@@ -69,7 +70,7 @@ func defaultConfig() appConfig {
 	c.Network.ClientPoolSize, c.Network.DNS, c.Network.MTU = 50, "1.1.1.1", 1400
 	c.TUN.Name = ""
 	c.NAT.Enabled = true
-	c.IPsec.IKEListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", "0.0.0.0", 1024
+	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	return c
 }
@@ -143,6 +144,7 @@ func applyEnvironment(c *appConfig) error {
 		return err
 	}
 	overrideString("L2TP_IPSEC_IKE_LISTEN", &c.IPsec.IKEListen)
+	overrideString("L2TP_IPSEC_NATT_LISTEN", &c.IPsec.NATTListen)
 	overrideString("L2TP_IPSEC_ESP_LISTEN", &c.IPsec.ESPListen)
 	overrideString("L2TP_IPSEC_PSK", &c.IPsec.PreSharedKey)
 	overrideString("L2TP_IPSEC_SERVER_ID", &c.IPsec.ServerID)
