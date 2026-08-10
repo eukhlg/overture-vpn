@@ -6,10 +6,12 @@ IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
 Experimental IKEv1 PSK and raw ESP transport mode can now protect L2TP on
 Linux. It includes Main Mode, Quick Mode, DH2/DH14, AES-CBC or 3DES-CBC,
-HMAC-SHA1-96, anti-replay, and SA limits. It is disabled by default and is not
-yet a production security boundary: NAT detection, IKE fragmentation, DPD,
-rekeying, UDP/4500 migration, and external-client interoperability testing are
-still pending. Raw L2TP remains available for controlled test networks.
+HMAC-SHA1-96, anti-replay, Phase 2 lifetimes, IPv4 traffic selectors, and an
+authenticated ESP-to-UDP/1701 handoff into the same L2TP/PPP engine used by
+raw L2TP. It is disabled by default and is not yet a production security
+boundary: IKE fragmentation, DPD, PFS, rekeying, UDP/4500 migration, and
+external-client interoperability testing are still pending. Raw L2TP remains
+available for controlled test networks.
 
 The Main Mode responder uses PSK authentication, preserves the initiator's
 exact SA bytes for `HASH_I`/`HASH_R`, accepts paired seconds/kilobytes lifetime
@@ -17,6 +19,14 @@ attributes, requires explicit AES key lengths, caches byte-identical replies
 for retransmissions, and clears sensitive state after failure or expiry. It
 recognizes common Microsoft, DPD, and NAT-T vendor IDs and implements RFC 3947
 NAT-D calculations, but does not advertise or activate NAT-T migration yet.
+
+The Quick Mode responder verifies `HASH(1)`/`HASH(3)`, returns a selector-bound
+`HASH(2)`, negotiates AES/3DES ESP transport mode with HMAC-SHA1-96, derives
+independent inbound and outbound key material, and installs the pair only after
+the initiator's final confirmation. Decrypted ESP packets must contain UDP
+traffic addressed to port 1701; other inner protocols and ports are rejected
+before they reach the L2TP engine. Phase 2 PFS proposals are rejected until the
+Quick Mode KE exchange is implemented.
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
