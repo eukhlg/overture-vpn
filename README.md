@@ -11,6 +11,13 @@ yet a production security boundary: NAT detection, IKE fragmentation, DPD,
 rekeying, UDP/4500 migration, and external-client interoperability testing are
 still pending. Raw L2TP remains available for controlled test networks.
 
+The Main Mode responder uses PSK authentication, preserves the initiator's
+exact SA bytes for `HASH_I`/`HASH_R`, accepts paired seconds/kilobytes lifetime
+attributes, requires explicit AES key lengths, caches byte-identical replies
+for retransmissions, and clears sensitive state after failure or expiry. It
+recognizes common Microsoft, DPD, and NAT-T vendor IDs and implements RFC 3947
+NAT-D calculations, but does not advertise or activate NAT-T migration yet.
+
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
 
