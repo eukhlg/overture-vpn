@@ -1,7 +1,9 @@
 [server]
 listen = ":1701"
 hostname = "l2tp-go"
-debug = false
+# 0 disables diagnostics, 1 logs protocol and lifecycle events, and 2 also
+# traces every ESP/L2TP/PPP/IP packet.
+debug = 0
 
 [authentication]
 method = "mschapv2"

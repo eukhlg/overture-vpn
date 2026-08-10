@@ -19,7 +19,7 @@ type appConfig struct {
 	Server struct {
 		Listen   string `toml:"listen"`
 		Hostname string `toml:"hostname"`
-		Debug    bool   `toml:"debug"`
+		Debug    int    `toml:"debug"`
 	} `toml:"server"`
 	Authentication struct {
 		Method string       `toml:"method"`
@@ -105,7 +105,7 @@ func loadConfig(path string) (appConfig, error) {
 func applyEnvironment(c *appConfig) error {
 	overrideString("L2TP_LISTEN", &c.Server.Listen)
 	overrideString("L2TP_HOSTNAME", &c.Server.Hostname)
-	if err := overrideBool("L2TP_DEBUG", &c.Server.Debug); err != nil {
+	if err := overrideInt("L2TP_DEBUG", &c.Server.Debug); err != nil {
 		return err
 	}
 	overrideString("L2TP_AUTH", &c.Authentication.Method)
@@ -185,6 +185,9 @@ func applyEnvironment(c *appConfig) error {
 }
 
 func (c appConfig) validate() (networkConfig, map[string]string, error) {
+	if c.Server.Debug < 0 || c.Server.Debug > 2 {
+		return networkConfig{}, nil, fmt.Errorf("server.debug must be 0, 1, or 2")
+	}
 	users := make(map[string]string)
 	for _, user := range c.Authentication.Users {
 		if user.Username == "" || user.Password == "" {

@@ -142,6 +142,20 @@ func TestLoadConfigRejectsInvalidEnvironment(t *testing.T) {
 	}
 }
 
+func TestDebugLevels(t *testing.T) {
+	clearConfigEnvironment(t)
+	t.Setenv("L2TP_DEBUG", "2")
+	c, err := loadConfig("")
+	if err != nil || c.Server.Debug != 2 {
+		t.Fatalf("debug=%d err=%v", c.Server.Debug, err)
+	}
+	c.Authentication.Users = []userConfig{{Username: "vpn", Password: "secret"}}
+	c.Server.Debug = 3
+	if _, _, err := c.validate(); err == nil || !strings.Contains(err.Error(), "server.debug") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestParseUsers(t *testing.T) {
 	users, err := parseUsers("alice=one,bob=two:three")
 	if err != nil || users["alice"] != "one" || users["bob"] != "two:three" {

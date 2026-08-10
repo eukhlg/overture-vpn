@@ -186,7 +186,7 @@ temporary overrides:
 | `L2TP_USERNAME` | `vpn` | Username for the legacy single user |
 | `L2TP_USERS` | empty | Comma-separated `username=password` credentials |
 | `L2TP_AUTH` | `mschapv2` | PPP authentication: `mschapv2` or `pap` |
-| `L2TP_DEBUG` | `false` | Enable sanitized protocol tracing |
+| `L2TP_DEBUG` | `0` | Debug level: `0` off, `1` protocol/lifecycle, `2` per-packet tracing |
 | `L2TP_LISTEN` | `:1701` | UDP listen address |
 | `L2TP_HOSTNAME` | `l2tp-go` | Advertised L2TP host name |
 | `L2TP_CLIENT_SUBNET` | `10.0.0.0/24` | PPP client subnet and Docker NAT source |
@@ -240,7 +240,7 @@ host. Verify host and cloud firewalls separately.
 
 ## Interoperability test matrix
 
-Run tests with `L2TP_DEBUG=true` and forced NAT-T first. Test the Windows
+Run tests with `L2TP_DEBUG=1` and forced NAT-T first. Test the Windows
 built-in L2TP/IPsec client, NetworkManager-l2tp on Linux, and the macOS built-in
 L2TP over IPsec profile where available. Each client should be tested from a
 different NATed network and, when possible, from a directly addressed host.
@@ -277,7 +277,7 @@ with the component name before the process exits.
 For connection negotiation failures, enable tracing in `.env`:
 
 ```env
-L2TP_DEBUG=true
+L2TP_DEBUG=1
 ```
 
 Then recreate the container and follow its output:
@@ -287,13 +287,15 @@ docker compose up -d --force-recreate
 docker compose logs -f --tail=200 l2tp
 ```
 
-Debug mode records UDP/500 and UDP/4500 direction, IKE cookies/exchanges and
+Debug level 1 records IKE cookies/exchanges and
 state, proposal selection, NAT-D and migration decisions, Quick Mode SPIs and
-lifetimes, DPD sequences, ESP rejection reasons, protected UDP ports, and the
-L2TP handoff. Stable prefixes include `DEBUG ike`, `DEBUG natt`, `DEBUG quick`,
+lifetimes, authentication, DPD sequences, ESP rejection reasons, connections,
+disconnections, and lifecycle events. Stable prefixes include `DEBUG ike`, `DEBUG natt`, `DEBUG quick`,
 `DEBUG esp`, and `DEBUG ipsec lifecycle`. It does not record PSKs, passwords,
 DH private values, derived keys, authentication responses, or plaintext packet
-payloads.
+payloads. Level 2 additionally emits `TRACE` entries for every ESP, L2TP, PPP,
+and IPv4 packet and should be enabled only for short captures because it can
+produce logs faster than Docker can display them.
 
 ## Tests
 

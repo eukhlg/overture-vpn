@@ -31,7 +31,7 @@ func main() {
 	flag.BoolVar(&resolved.TUN.Enabled, "tun", resolved.TUN.Enabled, "create and configure a TUN interface for IPv4 routing")
 	flag.StringVar(&resolved.TUN.Name, "tun-name", resolved.TUN.Name, "requested TUN name (empty selects automatically)")
 	flag.IntVar(&resolved.Network.MTU, "mtu", resolved.Network.MTU, "TUN and PPP routing MTU")
-	flag.BoolVar(&resolved.Server.Debug, "debug", resolved.Server.Debug, "enable protocol debug tracing")
+	flag.IntVar(&resolved.Server.Debug, "debug", resolved.Server.Debug, "debug level: 0=off, 1=control plane, 2=packet trace")
 	printValue := flag.String("print-config-value", "", "print one resolved value and exit")
 	flag.Parse()
 	if *legacyUsername != "" {
@@ -76,8 +76,11 @@ func main() {
 	if serverConfig.MaxSessions < 0 || serverConfig.MaxSessionsPerTunnel < 0 || serverConfig.MaxSessionsPerUser < 0 {
 		log.Fatal("session limits must be zero (unlimited) or positive")
 	}
-	if resolved.Server.Debug {
+	if resolved.Server.Debug >= 1 {
 		serverConfig.Debugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
+	}
+	if resolved.Server.Debug >= 2 {
+		serverConfig.Tracef = func(format string, args ...any) { log.Printf("TRACE "+format, args...) }
 	}
 	s, err := server.Listen(resolved.Server.Listen, serverConfig)
 	if err != nil {
@@ -133,8 +136,8 @@ func main() {
 	}
 	log.Printf("L2TP listener started on %s (raw L2TP)", s.Conn.LocalAddr())
 	log.Printf("Client pool ready: subnet=%s server=%s range=%s-%s users=%d limits=%d/%d/%d", network.Subnet, network.Server, network.PoolStart, network.PoolEnd, len(users), serverConfig.MaxSessions, serverConfig.MaxSessionsPerTunnel, serverConfig.MaxSessionsPerUser)
-	if resolved.Server.Debug {
-		log.Printf("DEBUG protocol tracing enabled")
+	if resolved.Server.Debug > 0 {
+		log.Printf("DEBUG protocol tracing enabled level=%d", resolved.Server.Debug)
 	}
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- s.Serve(ctx) }()

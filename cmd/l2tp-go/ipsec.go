@@ -28,8 +28,12 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	espLifetime, _ := time.ParseDuration(config.IPsec.ESPLifetime)
 	dpdInterval, _ := time.ParseDuration(config.IPsec.DPDInterval)
 	var debugf func(string, ...any)
-	if config.Server.Debug {
+	if config.Server.Debug >= 1 {
 		debugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
+	}
+	var tracef func(string, ...any)
+	if config.Server.Debug >= 2 {
+		tracef = func(format string, args ...any) { log.Printf("TRACE "+format, args...) }
 	}
 	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte(config.IPsec.PreSharedKey), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, ProtocolID: 17, Port: 500, Data: identityIP}, ResponderEndpoint: netip.AddrPortFrom(identity, 500), MaxPhase1SAs: config.IPsec.MaxSAs, MaxHalfOpen: config.IPsec.MaxHalfOpen, MaxSAsPerPeer: config.IPsec.MaxSAsPerPeer, Phase1Lifetime: ikeLifetime, ESPLifetime: espLifetime, DPDInterval: dpdInterval, ForceNATT: config.IPsec.ForceNATT, Debugf: debugf})
 	if err != nil {
@@ -45,7 +49,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, err
 	}
-	bridge.Debugf = debugf
+	bridge.Tracef = tracef
 	raw, err := server.ListenRawESP(config.IPsec.ESPListen, bridge)
 	if err != nil {
 		_ = ike.Close()
@@ -58,6 +62,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return nil, fmt.Errorf("listen NAT-T: %w", err)
 	}
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
+	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
 		if err := registry.Install(peer, pair); err != nil {
 			log.Printf("IPsec SA install failed: peer=%s error=%v", peer, err)
@@ -160,7 +165,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			case now := <-ticker.C:
 				lifecycle(ctx, control.Maintain(now))
 				for _, datagram := range control.PollDPD(now) {
-					if err := sendControl(datagram); err != nil && config.Server.Debug {
+					if err := sendControl(datagram); err != nil && config.Server.Debug >= 1 {
 						log.Printf("DEBUG ipsec lifecycle dpd tx failed peer=%s error=%v", datagram.Peer, err)
 					}
 				}
