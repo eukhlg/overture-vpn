@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -118,6 +119,12 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				}
 				datagram, err := bridge.SealL2TP(info.Peer, packet.Payload)
 				if err != nil {
+					if errors.Is(err, server.ErrUnknownESP) || errors.Is(err, server.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+						if debugf != nil {
+							debugf("ipsec stale client packet dropped peer=%s error=%v", info.Peer, err)
+						}
+						return nil
+					}
 					return err
 				}
 				return send(datagram)
@@ -145,6 +152,12 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				}
 				datagram, err := bridge.SealL2TP(frame.Peer, packet.Payload)
 				if err != nil {
+					if errors.Is(err, server.ErrUnknownESP) || errors.Is(err, server.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+						if debugf != nil {
+							debugf("ipsec stale client packet dropped peer=%s error=%v", frame.Peer, err)
+						}
+						return nil
+					}
 					return err
 				}
 				return send(datagram)
