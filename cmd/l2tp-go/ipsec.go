@@ -110,6 +110,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		l2tpResult := result.L2TP
 		if l2tpResult.Opened != nil && l2tpServer.SessionOpened != nil {
 			info := *l2tpResult.Opened
+			info.Protocol = "l2tp/ipsec"
 			if err := l2tpServer.SessionOpened(callbackContext, info, func(payload []byte) error {
 				packet, err := l2tpServer.Engine.SendIPv4(info.TunnelID, info.SessionID, payload)
 				if err != nil {
@@ -126,6 +127,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		}
 		if l2tpServer.SessionClosed != nil {
 			for _, info := range l2tpResult.Closed {
+				info.Protocol = "l2tp/ipsec"
 				l2tpServer.SessionClosed(callbackContext, info)
 			}
 		}

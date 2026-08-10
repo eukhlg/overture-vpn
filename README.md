@@ -297,6 +297,12 @@ payloads. Level 2 additionally emits `TRACE` entries for every ESP, L2TP, PPP,
 and IPv4 packet and should be enabled only for short captures because it can
 produce logs faster than Docker can display them.
 
+Successful PPP session events are always written to standard output at every
+debug level. Each connect/disconnect line includes the authenticated username,
+assigned VPN address, transport (`l2tp` or `l2tp/ipsec`), peer address, tunnel
+ID, and session ID. Sessions that fail before authentication and IPCP open do
+not produce a misleading connected/disconnected pair.
+
 ## Tests
 
 ```sh

@@ -105,16 +105,26 @@ func main() {
 			log.Fatal(err)
 		}
 		s.RouteIPv4 = router.RouteIPv4
-		s.SessionOpened = func(_ context.Context, info server.SessionInfo, send func([]byte) error) error {
-			router.Bind(info.Address, send)
-			return nil
-		}
-		s.SessionClosed = func(_ context.Context, info server.SessionInfo) { router.Forget(info.Address) }
 		log.Printf("TUN routing enabled on %s (%s)", device.Name(), prefix)
 	} else {
 		s.RouteIPv4 = func(_ context.Context, frame server.DataFrame, _ func([]byte) error) error {
 			log.Printf("IPv4 packet ready for routing: peer=%s bytes=%d (enable -tun to forward)", frame.Peer, len(frame.IPv4))
 			return nil
+		}
+	}
+	s.SessionOpened = func(_ context.Context, info server.SessionInfo, send func([]byte) error) error {
+		log.Printf("VPN client connected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
+		if router != nil {
+			router.Bind(info.Address, send)
+		}
+		return nil
+	}
+	s.SessionClosed = func(_ context.Context, info server.SessionInfo) {
+		if info.Connected {
+			log.Printf("VPN client disconnected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
+		}
+		if router != nil {
+			router.Forget(info.Address)
 		}
 	}
 
