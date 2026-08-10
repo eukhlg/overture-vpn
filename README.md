@@ -4,42 +4,80 @@ A lightweight Go L2TPv2 server under active development. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-Experimental IKEv1 PSK with raw ESP or NAT-T transport can now protect L2TP on
-Linux. It includes Main Mode, Quick Mode, DH2/DH14, AES-CBC or 3DES-CBC,
-HMAC-SHA1-96, anti-replay, Phase 2 lifetimes, IPv4 traffic selectors, and an
-authenticated ESP-to-UDP/1701 handoff into the same L2TP/PPP engine used by
-raw L2TP. It is disabled by default and is not yet a production security
-boundary: IKE fragmentation, proactive DPD probes, PFS, server-initiated
-rekeying, and broad external-client
-interoperability testing are still pending. Raw L2TP remains
-available for controlled test networks.
+## IPsec status
 
-The Main Mode responder uses PSK authentication, preserves the initiator's
-exact SA bytes for `HASH_I`/`HASH_R`, accepts paired seconds/kilobytes lifetime
-attributes, requires explicit AES key lengths, caches byte-identical replies
-for retransmissions, and clears sensitive state after failure or expiry. It
-recognizes common Microsoft, DPD, and NAT-T vendor IDs. RFC 3947 NAT-D enables
-cookie-authenticated migration to UDP/4500 when either endpoint is behind NAT.
-The shared UDP/4500 listener demultiplexes marker-prefixed IKE, ESP, and NAT
-keepalives according to RFC 3948. Older NAT-T draft IDs are recognized but not
-negotiated.
+The server includes an experimental IKEv1/IPsec implementation for protecting
+L2TP traffic on Linux. It has been successfully tested with the built-in
+L2TP/IPsec clients on Windows, Linux, and macOS using pre-shared-key
+authentication.
 
-The Quick Mode responder verifies `HASH(1)`/`HASH(3)`, returns a selector-bound
-`HASH(2)`, negotiates AES/3DES ESP transport mode with HMAC-SHA1-96, derives
-independent inbound and outbound key material, and installs the pair only after
-the initiator's final confirmation. Decrypted ESP packets must contain UDP
-traffic addressed to port 1701; other inner protocols and ports are rejected
-before they reach the L2TP engine. Phase 2 PFS proposals are rejected until the
-Quick Mode KE exchange is implemented.
+The implementation is functional but has not undergone an independent security
+audit or extensive production-scale testing. It is suitable for interoperability
+testing and controlled deployments, but should not yet be treated as a
+production security boundary.
 
-Authenticated informational exchanges provide RFC 3706 DPD acknowledgements
-and process IKE/ESP delete payloads. IKE expiry or deletion revokes all child
-ESP pairs, while an ESP delete revokes both directions of the matching pair.
-Client-initiated Quick Mode rekeys overlap with the previous pair until traffic
-arrives on the replacement SPI. On graceful shutdown the server sends an
-encrypted IKE delete before closing UDP/500 or UDP/4500. Proactive DPD probes
-retire a peer after three missed intervals. Server-initiated rekey scheduling
-is not implemented yet.
+<details>
+<summary>IPsec capabilities and current limitations</summary>
+
+### Supported capabilities
+
+- IKEv1 Main Mode responder with pre-shared-key authentication
+- IKEv1 Quick Mode
+- AES-128/192/256-CBC and 3DES-CBC encryption
+- SHA-1 and SHA-256 for IKE Phase 1
+- Diffie-Hellman groups 2 and 14
+- ESP transport mode with AES or 3DES
+- HMAC-SHA1-96 ESP authentication
+- RFC 3947/3948 NAT traversal over UDP port 4500
+- IPv4 address, subnet, and range traffic selectors
+- NAT Original Address payloads
+- ESP anti-replay protection
+- IKE and ESP lifetimes
+- RFC 3706 Dead Peer Detection
+- Authenticated IKE and ESP deletion
+- Client-initiated Quick Mode rekeying with overlapping ESP associations
+- Raw ESP transport for native Linux deployments
+- Protected L2TP handoff restricted to authenticated UDP port 1701 traffic
+
+The implementation intentionally rejects obsolete DH group 1 and MD5-based
+transforms.
+
+### Current limitations
+
+- No Phase 2 Perfect Forward Secrecy
+- No server-initiated IKE or ESP rekeying
+- No IKE fragmentation
+- No IPsec tunnel mode
+- No arbitrary protected protocols
+- No L2TPv3 or EtherIP site-to-site operation
+- No RADIUS, Active Directory, or NT-domain authentication
+- No independently verified iOS or Android interoperability
+- Limited long-duration, high-load, malformed-traffic, and denial-of-service
+  testing
+- No independent security audit
+
+### Protocol behavior
+
+Main Mode preserves the initiator's exact SA bytes for `HASH_I` and `HASH_R`,
+validates proposal attributes, requires explicit AES key lengths, caches
+byte-identical replies for retransmissions, and clears sensitive exchange state
+after failure or expiry. It recognizes common Microsoft, DPD, and NAT-T vendor
+identifiers. RFC 3947 NAT detection enables authenticated migration to UDP port
+4500 when NAT is detected or NAT-T is explicitly preferred.
+
+Quick Mode validates `HASH(1)` and `HASH(3)`, generates selector-bound `HASH(2)`,
+derives independent inbound and outbound ESP key material, and installs an ESP
+pair only after the initiator's final confirmation. Phase 2 proposals requesting
+PFS are rejected until Quick Mode key exchange support is implemented.
+
+Authenticated informational exchanges process Dead Peer Detection and IKE/ESP
+deletion messages. Proactive DPD probes retire a peer after three missed
+intervals. Client-initiated rekeys retain the previous ESP association during
+transition and automatically move active L2TP flows to the replacement
+association. Graceful server shutdown sends encrypted IKE deletion messages
+before closing the IKE and NAT-T listeners.
+
+</details>
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
