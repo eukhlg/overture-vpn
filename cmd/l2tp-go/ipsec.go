@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 
+	"l2tp-go/protocol/esp"
 	"l2tp-go/protocol/isakmp"
 	"l2tp-go/server"
 )
@@ -14,6 +15,8 @@ import (
 type ipsecRuntime struct {
 	ike       *server.IKEServer
 	esp, natt *server.ESPTransportServer
+	registry  *server.ESPRegistry
+	control   *isakmp.ControlPlane
 	done      chan error
 }
 
@@ -53,6 +56,21 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		log.Printf("IPsec ESP SA established: peer=%s inbound_spi=%08x outbound_spi=%08x", peer, pair.Inbound.SPI, pair.Outbound.SPI)
 	}
 	ike.Established, natt.Established = established, established
+	lifecycle := func(_ context.Context, events []isakmp.LifecycleEvent) {
+		for _, event := range events {
+			switch event.Type {
+			case isakmp.LifecycleDeleteESP:
+				for _, spi := range event.SPIs {
+					registry.Remove(spi)
+				}
+				log.Printf("IPsec ESP SA delete received: spis=%x", event.SPIs)
+			case isakmp.LifecycleDeleteIKE, isakmp.LifecycleExpireIKE:
+				registry.RemoveIKE(event.ResponderCookie)
+				log.Printf("IKEv1 SA retired: responder_cookie=%x reason=%d", event.ResponderCookie, event.Type)
+			}
+		}
+	}
+	ike.Lifecycle, natt.Lifecycle = lifecycle, lifecycle
 	send := func(datagram server.ESPDatagram) error {
 		if datagram.NATT {
 			_, err := natt.Conn.WriteTo(datagram.Payload, datagram.Peer)
@@ -110,7 +128,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return nil
 	}
 	raw.HandleResult, natt.HandleResult = handleResult, handleResult
-	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, done: make(chan error, 3)}
+	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 3)}
 	go func() { runtime.done <- ike.Serve(ctx) }()
 	go func() { runtime.done <- raw.Serve(ctx) }()
 	go func() { runtime.done <- natt.Serve(ctx) }()
@@ -121,7 +139,17 @@ func (r *ipsecRuntime) Close() {
 	if r == nil {
 		return
 	}
+	for _, datagram := range r.control.Shutdown() {
+		payload := datagram.Payload
+		conn := r.ike.Conn
+		if datagram.NATT {
+			payload = esp.EncapsulateNATTIKE(payload)
+			conn = r.natt.Conn
+		}
+		_, _ = conn.WriteTo(payload, datagram.Peer)
+	}
 	_ = r.ike.Close()
 	_ = r.esp.Close()
 	_ = r.natt.Close()
+	r.registry.Close()
 }

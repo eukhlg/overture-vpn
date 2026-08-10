@@ -9,7 +9,8 @@ Linux. It includes Main Mode, Quick Mode, DH2/DH14, AES-CBC or 3DES-CBC,
 HMAC-SHA1-96, anti-replay, Phase 2 lifetimes, IPv4 traffic selectors, and an
 authenticated ESP-to-UDP/1701 handoff into the same L2TP/PPP engine used by
 raw L2TP. It is disabled by default and is not yet a production security
-boundary: IKE fragmentation, DPD, PFS, rekeying, and broad external-client
+boundary: IKE fragmentation, proactive DPD probes, PFS, server-initiated
+rekeying, and broad external-client
 interoperability testing are still pending. Raw L2TP remains
 available for controlled test networks.
 
@@ -30,6 +31,14 @@ the initiator's final confirmation. Decrypted ESP packets must contain UDP
 traffic addressed to port 1701; other inner protocols and ports are rejected
 before they reach the L2TP engine. Phase 2 PFS proposals are rejected until the
 Quick Mode KE exchange is implemented.
+
+Authenticated informational exchanges provide RFC 3706 DPD acknowledgements
+and process IKE/ESP delete payloads. IKE expiry or deletion revokes all child
+ESP pairs, while an ESP delete revokes both directions of the matching pair.
+Client-initiated Quick Mode rekeys overlap with the previous pair until traffic
+arrives on the replacement SPI. On graceful shutdown the server sends an
+encrypted IKE delete before closing UDP/500 or UDP/4500. Proactive DPD requests
+and server-initiated rekey scheduling are not implemented yet.
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
