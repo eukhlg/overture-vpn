@@ -1,7 +1,0 @@
-services:
-  l2tp:
-    volumes:
-      - ./l2tp-go.toml:/etc/l2tp-go/server.toml:ro
-    environment:
-      L2TP_CONFIG: /etc/l2tp-go/server.toml
-      L2TP_TUN_ENABLED: ""

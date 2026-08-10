@@ -19,6 +19,7 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
 		"L2TP_IPSEC_PSK", "L2TP_IPSEC_SERVER_ID", "L2TP_IPSEC_MAX_SAS",
+		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
 	} {
 		t.Setenv(name, "")
 	}
@@ -38,6 +39,19 @@ func TestIPsecConfigRequiresPSKAndIPv4Identity(t *testing.T) {
 	}
 	if c.IPsec.NATTListen != ":4500" {
 		t.Fatalf("NAT-T listen=%q", c.IPsec.NATTListen)
+	}
+	if c.IPsec.IKELifetime != "8h" || c.IPsec.ESPLifetime != "1h" || c.IPsec.DPDInterval != "20s" || c.IPsec.MaxHalfOpen != 128 || c.IPsec.MaxSAsPerPeer != 4 {
+		t.Fatalf("IPsec defaults=%#v", c.IPsec)
+	}
+}
+
+func TestIPsecConfigRejectsInvalidLifecycleDuration(t *testing.T) {
+	clearConfigEnvironment(t)
+	c := defaultConfig()
+	c.Authentication.Users = []userConfig{{Username: "vpn", Password: "secret"}}
+	c.IPsec.DPDInterval = "often"
+	if _, _, err := c.validate(); err == nil || !strings.Contains(err.Error(), "dpd_interval") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

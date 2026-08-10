@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"time"
 
 	"l2tp-go/protocol/esp"
 	"l2tp-go/protocol/isakmp"
@@ -23,7 +24,14 @@ type ipsecRuntime struct {
 func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server) (*ipsecRuntime, error) {
 	identityIP := net.ParseIP(config.IPsec.ServerID).To4()
 	identity, _ := netip.ParseAddr(config.IPsec.ServerID)
-	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte(config.IPsec.PreSharedKey), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, ProtocolID: 17, Port: 500, Data: identityIP}, ResponderEndpoint: netip.AddrPortFrom(identity, 500), MaxPhase1SAs: config.IPsec.MaxSAs})
+	ikeLifetime, _ := time.ParseDuration(config.IPsec.IKELifetime)
+	espLifetime, _ := time.ParseDuration(config.IPsec.ESPLifetime)
+	dpdInterval, _ := time.ParseDuration(config.IPsec.DPDInterval)
+	var debugf func(string, ...any)
+	if config.Server.Debug {
+		debugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
+	}
+	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte(config.IPsec.PreSharedKey), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, ProtocolID: 17, Port: 500, Data: identityIP}, ResponderEndpoint: netip.AddrPortFrom(identity, 500), MaxPhase1SAs: config.IPsec.MaxSAs, MaxHalfOpen: config.IPsec.MaxHalfOpen, MaxSAsPerPeer: config.IPsec.MaxSAsPerPeer, Phase1Lifetime: ikeLifetime, ESPLifetime: espLifetime, DPDInterval: dpdInterval, ForceNATT: config.IPsec.ForceNATT, Debugf: debugf})
 	if err != nil {
 		return nil, fmt.Errorf("create IKE control plane: %w", err)
 	}
@@ -37,6 +45,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, err
 	}
+	bridge.Debugf = debugf
 	raw, err := server.ListenRawESP(config.IPsec.ESPListen, bridge)
 	if err != nil {
 		_ = ike.Close()
@@ -48,6 +57,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, fmt.Errorf("listen NAT-T: %w", err)
 	}
+	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
 		if err := registry.Install(peer, pair); err != nil {
 			log.Printf("IPsec SA install failed: peer=%s error=%v", peer, err)
@@ -71,6 +81,14 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		}
 	}
 	ike.Lifecycle, natt.Lifecycle = lifecycle, lifecycle
+	sendControl := func(datagram isakmp.ControlDatagram) error {
+		payload, conn := datagram.Payload, ike.Conn
+		if datagram.NATT {
+			payload, conn = esp.EncapsulateNATTIKE(payload), natt.Conn
+		}
+		_, err := conn.WriteTo(payload, datagram.Peer)
+		return err
+	}
 	send := func(datagram server.ESPDatagram) error {
 		if datagram.NATT {
 			_, err := natt.Conn.WriteTo(datagram.Payload, datagram.Peer)
@@ -132,6 +150,23 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	go func() { runtime.done <- ike.Serve(ctx) }()
 	go func() { runtime.done <- raw.Serve(ctx) }()
 	go func() { runtime.done <- natt.Serve(ctx) }()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				lifecycle(ctx, control.Maintain(now))
+				for _, datagram := range control.PollDPD(now) {
+					if err := sendControl(datagram); err != nil && config.Server.Debug {
+						log.Printf("DEBUG ipsec lifecycle dpd tx failed peer=%s error=%v", datagram.Peer, err)
+					}
+				}
+			}
+		}
+	}()
 	return runtime, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
@@ -41,13 +42,19 @@ type appConfig struct {
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
 	IPsec struct {
-		Enabled      bool   `toml:"enabled"`
-		IKEListen    string `toml:"ike_listen"`
-		NATTListen   string `toml:"natt_listen"`
-		ESPListen    string `toml:"esp_listen"`
-		PreSharedKey string `toml:"pre_shared_key"`
-		ServerID     string `toml:"server_id"`
-		MaxSAs       int    `toml:"max_sas"`
+		Enabled       bool   `toml:"enabled"`
+		IKEListen     string `toml:"ike_listen"`
+		NATTListen    string `toml:"natt_listen"`
+		ESPListen     string `toml:"esp_listen"`
+		PreSharedKey  string `toml:"pre_shared_key"`
+		ServerID      string `toml:"server_id"`
+		MaxSAs        int    `toml:"max_sas"`
+		ForceNATT     bool   `toml:"force_natt"`
+		IKELifetime   string `toml:"ike_lifetime"`
+		ESPLifetime   string `toml:"esp_lifetime"`
+		DPDInterval   string `toml:"dpd_interval"`
+		MaxHalfOpen   int    `toml:"max_half_open"`
+		MaxSAsPerPeer int    `toml:"max_sa_per_peer"`
 	} `toml:"ipsec"`
 	Limits struct {
 		Sessions          int `toml:"sessions"`
@@ -71,6 +78,8 @@ func defaultConfig() appConfig {
 	c.TUN.Name = ""
 	c.NAT.Enabled = true
 	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
+	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
+	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	return c
 }
@@ -151,6 +160,18 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideInt("L2TP_IPSEC_MAX_SAS", &c.IPsec.MaxSAs); err != nil {
 		return err
 	}
+	if err := overrideBool("L2TP_IPSEC_FORCE_NATT", &c.IPsec.ForceNATT); err != nil {
+		return err
+	}
+	overrideString("L2TP_IPSEC_IKE_LIFETIME", &c.IPsec.IKELifetime)
+	overrideString("L2TP_IPSEC_ESP_LIFETIME", &c.IPsec.ESPLifetime)
+	overrideString("L2TP_IPSEC_DPD_INTERVAL", &c.IPsec.DPDInterval)
+	if err := overrideInt("L2TP_IPSEC_MAX_HALF_OPEN", &c.IPsec.MaxHalfOpen); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_IPSEC_MAX_SA_PER_PEER", &c.IPsec.MaxSAsPerPeer); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_MAX_SESSIONS", &c.Limits.Sessions); err != nil {
 		return err
 	}
@@ -180,8 +201,14 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	if c.Network.MTU <= 0 || c.Limits.Sessions < 0 || c.Limits.SessionsPerTunnel < 0 || c.Limits.SessionsPerUser < 0 {
 		return networkConfig{}, nil, fmt.Errorf("MTU must be positive and session limits cannot be negative")
 	}
-	if c.IPsec.MaxSAs < 0 {
-		return networkConfig{}, nil, fmt.Errorf("ipsec.max_sas cannot be negative")
+	if c.IPsec.MaxSAs < 0 || c.IPsec.MaxHalfOpen < 0 || c.IPsec.MaxSAsPerPeer < 0 {
+		return networkConfig{}, nil, fmt.Errorf("IPsec SA limits cannot be negative")
+	}
+	for name, value := range map[string]string{"ike_lifetime": c.IPsec.IKELifetime, "esp_lifetime": c.IPsec.ESPLifetime, "dpd_interval": c.IPsec.DPDInterval} {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration < 0 || (name != "dpd_interval" && duration == 0) {
+			return networkConfig{}, nil, fmt.Errorf("ipsec.%s must be a valid positive duration", name)
+		}
 	}
 	if c.IPsec.Enabled {
 		if c.IPsec.PreSharedKey == "" {

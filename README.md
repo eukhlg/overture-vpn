@@ -37,8 +37,9 @@ and process IKE/ESP delete payloads. IKE expiry or deletion revokes all child
 ESP pairs, while an ESP delete revokes both directions of the matching pair.
 Client-initiated Quick Mode rekeys overlap with the previous pair until traffic
 arrives on the replacement SPI. On graceful shutdown the server sends an
-encrypted IKE delete before closing UDP/500 or UDP/4500. Proactive DPD requests
-and server-initiated rekey scheduling are not implemented yet.
+encrypted IKE delete before closing UDP/500 or UDP/4500. Proactive DPD probes
+retire a peer after three missed intervals. Server-initiated rekey scheduling
+is not implemented yet.
 
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
@@ -62,25 +63,26 @@ docker compose up --build -d
 docker compose logs -f l2tp
 ```
 
-The default Compose service publishes UDP 1701, grants only `NET_ADMIN`, mounts
+The single Compose service publishes UDP 1701, UDP 500, and UDP 4500; grants
+`NET_ADMIN` and `NET_RAW`; mounts
 `/dev/net/tun`, enables IPv4 forwarding in the container namespace, and
 masquerades the configured client subnet through the interface selected by the
 container's IPv4 default route. `L2TP_NAT_INTERFACE` remains available as an
 explicit override.
 
-Experimental raw ESP requires Linux host networking because Docker cannot
-publish IP protocol 50 through a UDP/TCP port mapping. Set a real public server
-identity and PSK, then apply the IPsec override:
+Docker cannot publish raw IP protocol 50 through a UDP/TCP port mapping. The
+default container therefore uses forced NAT-T for interoperable IPsec. Native
+Linux deployments may still use raw ESP. Set a real public server identity and
+PSK in `.env`, then start the same Compose service:
 
 ```sh
 L2TP_IPSEC_PSK='replace-this' \
 L2TP_IPSEC_SERVER_ID='203.0.113.10' \
-docker compose -f docker-compose.yml -f docker-compose.ipsec.yml up --build -d
+docker compose up --build -d
 ```
 
-This override adds `NET_RAW` and removes published ports because host
-networking binds UDP 500, UDP 4500, UDP 1701, and raw ESP directly on the Linux host.
-Docker Desktop cannot provide this raw-ESP path.
+Docker Desktop cannot provide the raw-ESP path, but UDP/4500 NAT-T remains the
+supported container path.
 
 During a normal Compose restart or stop, the server sends `StopCCN` to every
 active tunnel before closing UDP. Clients configured for automatic reconnect
@@ -95,12 +97,14 @@ docker compose down
 ```
 
 To use a TOML file instead of `.env`, copy the complete example, edit the
-passwords, protect the file, and start Compose with its override:
+passwords, protect the file, and point the consolidated Compose service at it:
 
 ```sh
 cp l2tp-go.toml.example l2tp-go.toml
 chmod 600 l2tp-go.toml
-docker compose -f docker-compose.yml -f docker-compose.toml.yml up --build -d
+L2TP_CONFIG_FILE=./l2tp-go.toml \
+L2TP_CONFIG=/etc/l2tp-go/server.toml \
+docker compose up --build -d
 ```
 
 The override mounts `l2tp-go.toml` read-only at
@@ -205,6 +209,12 @@ temporary overrides:
 | `L2TP_IPSEC_PSK` | empty | IKEv1 pre-shared key |
 | `L2TP_IPSEC_SERVER_ID` | empty | Public IPv4 identity used by IKE |
 | `L2TP_IPSEC_MAX_SAS` | `1024` | Maximum simultaneous Phase 1 SAs |
+| `L2TP_IPSEC_FORCE_NATT` | `false` | Prefer UDP/4500 for NAT-T-capable clients even when NAT-D finds no NAT |
+| `L2TP_IPSEC_IKE_LIFETIME` | `8h` | Server maximum Phase 1 lifetime |
+| `L2TP_IPSEC_ESP_LIFETIME` | `1h` | Server maximum ESP lifetime |
+| `L2TP_IPSEC_DPD_INTERVAL` | `20s` | Proactive DPD interval; `0s` disables probes |
+| `L2TP_IPSEC_MAX_HALF_OPEN` | `128` | Maximum incomplete Main Mode exchanges |
+| `L2TP_IPSEC_MAX_SA_PER_PEER` | `4` | Maximum Phase 1 SAs for one client IP |
 
 Both address settings accept a full IPv4 address or a host offset. For example,
 subnet `10.0.0.0/24`, server `1`, start `100`, and limit `50` produce server
@@ -227,6 +237,28 @@ client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP.
 
 Successful startup does not prove that UDP 1701 is reachable from outside the
 host. Verify host and cloud firewalls separately.
+
+## Interoperability test matrix
+
+Run tests with `L2TP_DEBUG=true` and forced NAT-T first. Test the Windows
+built-in L2TP/IPsec client, NetworkManager-l2tp on Linux, and the macOS built-in
+L2TP over IPsec profile where available. Each client should be tested from a
+different NATed network and, when possible, from a directly addressed host.
+
+For every platform verify: Main Mode and Quick Mode completion, UDP/4500
+migration, PPP authentication, assigned address and DNS, traffic through TUN,
+DPD acknowledgement, an hour-bound client-initiated rekey, manual disconnect,
+container restart/reconnect, and two simultaneous users. Capture the server
+side with:
+
+```sh
+docker compose logs -f --since=5s --no-color l2tp 2>&1 | tee l2tp-ipsec.log
+```
+
+If negotiation stops, preserve the complete log from the first `ike rx` line
+through the rejection. The trace deliberately omits PSKs, passwords, key
+material, and decrypted traffic, so it is suitable for interoperability bug
+reports after reviewing public IP addresses.
 
 ## Troubleshooting
 
@@ -255,9 +287,13 @@ docker compose up -d --force-recreate
 docker compose logs -f --tail=200 l2tp
 ```
 
-Debug mode records peer addresses, message types, tunnel/session identifiers,
-sequence numbers, PPP protocols and phase transitions. It does not record
-passwords, authentication responses, or packet payloads.
+Debug mode records UDP/500 and UDP/4500 direction, IKE cookies/exchanges and
+state, proposal selection, NAT-D and migration decisions, Quick Mode SPIs and
+lifetimes, DPD sequences, ESP rejection reasons, protected UDP ports, and the
+L2TP handoff. Stable prefixes include `DEBUG ike`, `DEBUG natt`, `DEBUG quick`,
+`DEBUG esp`, and `DEBUG ipsec lifecycle`. It does not record PSKs, passwords,
+DH private values, derived keys, authentication responses, or plaintext packet
+payloads.
 
 ## Tests
 

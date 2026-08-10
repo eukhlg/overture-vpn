@@ -4,10 +4,15 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
     ports:
       - "1701:1701/udp"
+      - "500:500/udp"
+      - "4500:4500/udp"
+    volumes:
+      - ${L2TP_CONFIG_FILE:-./l2tp-go.toml.example}:/etc/l2tp-go/server.toml:ro
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
@@ -32,11 +37,19 @@ services:
       L2TP_MAX_SESSIONS_PER_TUNNEL: ${L2TP_MAX_SESSIONS_PER_TUNNEL:-}
       L2TP_MAX_SESSIONS_PER_USER: ${L2TP_MAX_SESSIONS_PER_USER:-}
       L2TP_IPSEC_ENABLED: ${L2TP_IPSEC_ENABLED:-}
+      L2TP_CONFIG: ${L2TP_CONFIG:-}
       L2TP_IPSEC_IKE_LISTEN: ${L2TP_IPSEC_IKE_LISTEN:-}
+      L2TP_IPSEC_NATT_LISTEN: ${L2TP_IPSEC_NATT_LISTEN:-}
       L2TP_IPSEC_ESP_LISTEN: ${L2TP_IPSEC_ESP_LISTEN:-}
       L2TP_IPSEC_PSK: ${L2TP_IPSEC_PSK:-}
       L2TP_IPSEC_SERVER_ID: ${L2TP_IPSEC_SERVER_ID:-}
       L2TP_IPSEC_MAX_SAS: ${L2TP_IPSEC_MAX_SAS:-}
+      L2TP_IPSEC_FORCE_NATT: ${L2TP_IPSEC_FORCE_NATT:-}
+      L2TP_IPSEC_IKE_LIFETIME: ${L2TP_IPSEC_IKE_LIFETIME:-}
+      L2TP_IPSEC_ESP_LIFETIME: ${L2TP_IPSEC_ESP_LIFETIME:-}
+      L2TP_IPSEC_DPD_INTERVAL: ${L2TP_IPSEC_DPD_INTERVAL:-}
+      L2TP_IPSEC_MAX_HALF_OPEN: ${L2TP_IPSEC_MAX_HALF_OPEN:-}
+      L2TP_IPSEC_MAX_SA_PER_PEER: ${L2TP_IPSEC_MAX_SA_PER_PEER:-}
     healthcheck:
       test: ["CMD", "sh", "-c", "kill -0 1"]
       interval: 30s
