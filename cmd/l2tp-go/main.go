@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	"l2tp-go/protocol/ppp"
-	"l2tp-go/server"
-	"l2tp-go/tun"
+	"github.com/eukhlg/l2tp-go/protocol/ppp"
+	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/l2tp-go/tun"
 )
 
 func main() {
@@ -107,12 +107,12 @@ func main() {
 		s.RouteIPv4 = router.RouteIPv4
 		log.Printf("TUN routing enabled on %s (%s)", device.Name(), prefix)
 	} else {
-		s.RouteIPv4 = func(_ context.Context, frame server.DataFrame, _ func([]byte) error) error {
+		s.RouteIPv4 = func(_ context.Context, frame server.DataFrame, _ server.PacketWriter) error {
 			log.Printf("IPv4 packet ready for routing: peer=%s bytes=%d (enable -tun to forward)", frame.Peer, len(frame.IPv4))
 			return nil
 		}
 	}
-	s.SessionOpened = func(_ context.Context, info server.SessionInfo, send func([]byte) error) error {
+	s.SessionOpened = func(_ context.Context, info server.SessionInfo, send server.PacketWriter) error {
 		log.Printf("VPN client connected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
 		if router != nil {
 			router.Bind(info.Address, send)

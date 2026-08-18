@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"sync"
 
-	"l2tp-go/server"
+	"github.com/eukhlg/l2tp-go/server"
 )
 
 var (
@@ -16,7 +16,7 @@ var (
 	ErrNoRoute       = errors.New("tun: no route to PPP client")
 )
 
-type SendIPv4 func([]byte) error
+type SendIPv4 = server.PacketWriter
 
 // Router bridges IPv4 packets between PPP sessions and one TUN device. A
 // client's route is learned from its validated first packet and may be removed
@@ -42,7 +42,7 @@ func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 }
 
 // RouteIPv4 implements server.IPv4Router.
-func (r *Router) RouteIPv4(_ context.Context, frame server.DataFrame, send func([]byte) error) error {
+func (r *Router) RouteIPv4(_ context.Context, frame server.DataFrame, send server.PacketWriter) error {
 	source, _, err := packetAddresses(frame.IPv4)
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-module l2tp-go
+module github.com/eukhlg/l2tp-go
 
 go 1.25
 

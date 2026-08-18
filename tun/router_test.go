@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"l2tp-go/server"
+	"github.com/eukhlg/l2tp-go/server"
 )
 
 type memoryDevice struct {

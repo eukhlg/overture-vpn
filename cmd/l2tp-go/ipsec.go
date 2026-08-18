@@ -9,9 +9,9 @@ import (
 	"net/netip"
 	"time"
 
-	"l2tp-go/protocol/esp"
-	"l2tp-go/protocol/isakmp"
-	"l2tp-go/server"
+	"github.com/eukhlg/l2tp-go/protocol/esp"
+	"github.com/eukhlg/l2tp-go/protocol/isakmp"
+	"github.com/eukhlg/l2tp-go/server"
 )
 
 type ipsecRuntime struct {
@@ -108,62 +108,19 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	handleResult := func(callbackContext context.Context, result server.ESPBridgeResult) error {
-		l2tpResult := result.L2TP
-		if l2tpResult.Opened != nil && l2tpServer.SessionOpened != nil {
-			info := *l2tpResult.Opened
-			info.Protocol = "l2tp/ipsec"
-			if err := l2tpServer.SessionOpened(callbackContext, info, func(payload []byte) error {
-				packet, err := l2tpServer.Engine.SendIPv4(info.TunnelID, info.SessionID, payload)
-				if err != nil {
-					return err
-				}
-				datagram, err := bridge.SealL2TP(info.Peer, packet.Payload)
-				if err != nil {
-					if errors.Is(err, server.ErrUnknownESP) || errors.Is(err, server.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
-						if debugf != nil {
-							debugf("ipsec stale client packet dropped peer=%s error=%v", info.Peer, err)
-						}
-						return nil
+		return l2tpServer.Dispatch(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, _, _ uint16, payload []byte) error {
+			datagram, err := bridge.SealL2TP(peer, payload)
+			if err != nil {
+				if errors.Is(err, server.ErrUnknownESP) || errors.Is(err, server.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+					if debugf != nil {
+						debugf("ipsec stale client packet dropped peer=%s error=%v", peer, err)
 					}
-					return err
+					return nil
 				}
-				return send(datagram)
-			}); err != nil {
 				return err
 			}
-		}
-		if l2tpServer.SessionClosed != nil {
-			for _, info := range l2tpResult.Closed {
-				info.Protocol = "l2tp/ipsec"
-				l2tpServer.SessionClosed(callbackContext, info)
-			}
-		}
-		if l2tpResult.Data != nil && l2tpServer.HandleData != nil {
-			if err := l2tpServer.HandleData(callbackContext, *l2tpResult.Data); err != nil {
-				return err
-			}
-		}
-		if l2tpResult.Data != nil && l2tpResult.Data.IPv4 != nil && l2tpServer.RouteIPv4 != nil {
-			frame := *l2tpResult.Data
-			return l2tpServer.RouteIPv4(callbackContext, frame, func(payload []byte) error {
-				packet, err := l2tpServer.Engine.SendIPv4(frame.TunnelID, frame.Session.LocalID, payload)
-				if err != nil {
-					return err
-				}
-				datagram, err := bridge.SealL2TP(frame.Peer, packet.Payload)
-				if err != nil {
-					if errors.Is(err, server.ErrUnknownESP) || errors.Is(err, server.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
-						if debugf != nil {
-							debugf("ipsec stale client packet dropped peer=%s error=%v", frame.Peer, err)
-						}
-						return nil
-					}
-					return err
-				}
-				return send(datagram)
-			})
-		}
-		return nil
+			return send(datagram)
+		})
 	}
 	raw.HandleResult, natt.HandleResult = handleResult, handleResult
 	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 3)}

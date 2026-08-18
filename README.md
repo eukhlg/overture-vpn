@@ -4,6 +4,11 @@ A lightweight Go L2TPv2 server under active development. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
+The protocol and server packages are also usable as a public Go module. Network
+frontends can inject their own packet connections and consume authenticated
+sessions as raw IPv4 packet streams without enabling TUN or host routing. See
+[Embedding l2tp-go](EMBEDDING.md).
+
 ## IPsec status
 
 The server includes an experimental IKEv1/IPsec implementation for protecting
