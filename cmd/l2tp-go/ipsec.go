@@ -179,6 +179,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				return
 			case now := <-ticker.C:
 				lifecycle(ctx, control.Maintain(now))
+				for _, datagram := range control.PollRekey(now) {
+					if err := sendControl(datagram); err != nil && config.Server.Debug >= 1 {
+						log.Printf("DEBUG ipsec proactive rekey tx failed peer=%s error=%v", datagram.Peer, err)
+					}
+				}
 				for _, datagram := range control.PollDPD(now) {
 					if err := sendControl(datagram); err != nil && config.Server.Debug >= 1 {
 						log.Printf("DEBUG ipsec lifecycle dpd tx failed peer=%s error=%v", datagram.Peer, err)

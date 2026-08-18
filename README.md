@@ -45,7 +45,7 @@ transforms.
 ### Current limitations
 
 - No Phase 2 Perfect Forward Secrecy
-- No server-initiated IKE or ESP rekeying
+- No server-initiated IKE (Phase 1) rekeying
 - No IKE fragmentation
 - No IPsec tunnel mode
 - No arbitrary protected protocols
