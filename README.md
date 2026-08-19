@@ -41,6 +41,7 @@ production security boundary.
 - RFC 3706 Dead Peer Detection
 - Authenticated IKE and ESP deletion
 - Client-initiated Quick Mode rekeying with overlapping ESP associations
+- Client-initiated Phase 1 replacement with child-SA ownership transfer
 - Raw ESP transport for native Linux deployments
 - Protected L2TP handoff restricted to authenticated UDP port 1701 traffic
 
@@ -77,10 +78,16 @@ PFS are rejected until Quick Mode key exchange support is implemented.
 
 Authenticated informational exchanges process Dead Peer Detection and IKE/ESP
 deletion messages. Proactive DPD probes retire a peer after three missed
-intervals. Client-initiated rekeys retain the previous ESP association during
-transition and automatically move active L2TP flows to the replacement
-association. Graceful server shutdown sends encrypted IKE deletion messages
-before closing the IKE and NAT-T listeners.
+intervals. Client-initiated Quick Mode rekeys retain the previous ESP
+association during transition and automatically move active L2TP flows to the
+replacement association. An established Phase 1 lifetime is a soft boundary:
+the responder keeps the working IKE SA until the client opens a replacement Main
+Mode SA. It transfers the existing child SA to the replacement without changing
+its SPIs, keys, sequence state, or remaining lifetime. Later Quick Mode rekeying
+remains independent of the Phase 1 switch. The server does not originate Main
+Mode, so server-initiated Phase 1 rekeying remains a limitation. Graceful server
+shutdown sends encrypted IKE deletion messages before closing the IKE and NAT-T
+listeners.
 
 </details>
 

@@ -75,6 +75,9 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	lifecycle := func(_ context.Context, events []isakmp.LifecycleEvent) {
 		for _, event := range events {
 			switch event.Type {
+			case isakmp.LifecycleRebindIKE:
+				registry.RebindIKE(event.ResponderCookie, event.ReplacementCookie)
+				log.Printf("IPsec ESP SAs rebound: predecessor_cookie=%x replacement_cookie=%x", event.ResponderCookie, event.ReplacementCookie)
 			case isakmp.LifecycleDeleteESP:
 				for _, spi := range event.SPIs {
 					registry.Remove(spi)
