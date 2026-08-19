@@ -80,7 +80,10 @@ Authenticated informational exchanges process Dead Peer Detection and IKE/ESP
 deletion messages. Proactive DPD probes retire a peer after three missed
 intervals. Client-initiated Quick Mode rekeys retain the previous ESP
 association during transition and automatically move active L2TP flows to the
-replacement association. An established Phase 1 lifetime is a soft boundary:
+replacement association. Server-initiated Quick Mode is limited to three
+attempts with increasing delays; after that, the working child SA is retained
+while still valid and the server waits for a peer-initiated rekey. An established
+Phase 1 lifetime is a soft boundary:
 the responder keeps the working IKE SA until the client opens a replacement Main
 Mode SA. It transfers the existing child SA to the replacement without changing
 its SPIs, keys, sequence state, or remaining lifetime. Later Quick Mode rekeying
