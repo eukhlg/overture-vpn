@@ -1,5 +1,6 @@
 services:
   l2tp:
+    image: ${L2TP_IMAGE:-eukhlg/l2tp-go:latest}
     build: .
     restart: unless-stopped
     cap_add:
@@ -12,44 +13,11 @@ services:
       - "500:500/udp"
       - "4500:4500/udp"
     volumes:
-      - ${L2TP_CONFIG_FILE:-./l2tp-go.toml.example}:/etc/l2tp-go/server.toml:ro
+      - ${L2TP_CONFIG_FILE:-./l2tp-go.toml}:/etc/l2tp-go/server.toml:ro
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
-      L2TP_PASSWORD: ${L2TP_PASSWORD:-}
-      L2TP_USERS: ${L2TP_USERS:-}
-      L2TP_USERNAME: ${L2TP_USERNAME:-}
-      L2TP_AUTH: ${L2TP_AUTH:-}
-      L2TP_DEBUG: ${L2TP_DEBUG:-}
-      L2TP_LISTEN: ${L2TP_LISTEN:-}
-      L2TP_HOSTNAME: ${L2TP_HOSTNAME:-}
-      L2TP_CLIENT_SUBNET: ${L2TP_CLIENT_SUBNET:-}
-      L2TP_SERVER_IP: ${L2TP_SERVER_IP:-}
-      L2TP_CLIENT_POOL_START: ${L2TP_CLIENT_POOL_START:-}
-      L2TP_CLIENT_POOL_SIZE: ${L2TP_CLIENT_POOL_SIZE:-}
-      L2TP_DNS: ${L2TP_DNS:-}
-      L2TP_TUN_ENABLED: "true"
-      L2TP_TUN_NAME: ${L2TP_TUN_NAME:-}
-      L2TP_MTU: ${L2TP_MTU:-}
-      L2TP_NAT_ENABLED: ${L2TP_NAT_ENABLED:-}
-      L2TP_NAT_INTERFACE: ${L2TP_NAT_INTERFACE:-}
-      L2TP_MAX_SESSIONS: ${L2TP_MAX_SESSIONS:-}
-      L2TP_MAX_SESSIONS_PER_TUNNEL: ${L2TP_MAX_SESSIONS_PER_TUNNEL:-}
-      L2TP_MAX_SESSIONS_PER_USER: ${L2TP_MAX_SESSIONS_PER_USER:-}
-      L2TP_IPSEC_ENABLED: ${L2TP_IPSEC_ENABLED:-}
-      L2TP_CONFIG: ${L2TP_CONFIG:-}
-      L2TP_IPSEC_IKE_LISTEN: ${L2TP_IPSEC_IKE_LISTEN:-}
-      L2TP_IPSEC_NATT_LISTEN: ${L2TP_IPSEC_NATT_LISTEN:-}
-      L2TP_IPSEC_ESP_LISTEN: ${L2TP_IPSEC_ESP_LISTEN:-}
-      L2TP_IPSEC_PSK: ${L2TP_IPSEC_PSK:-}
-      L2TP_IPSEC_SERVER_ID: ${L2TP_IPSEC_SERVER_ID:-}
-      L2TP_IPSEC_MAX_SAS: ${L2TP_IPSEC_MAX_SAS:-}
-      L2TP_IPSEC_FORCE_NATT: ${L2TP_IPSEC_FORCE_NATT:-}
-      L2TP_IPSEC_IKE_LIFETIME: ${L2TP_IPSEC_IKE_LIFETIME:-}
-      L2TP_IPSEC_ESP_LIFETIME: ${L2TP_IPSEC_ESP_LIFETIME:-}
-      L2TP_IPSEC_DPD_INTERVAL: ${L2TP_IPSEC_DPD_INTERVAL:-}
-      L2TP_IPSEC_MAX_HALF_OPEN: ${L2TP_IPSEC_MAX_HALF_OPEN:-}
-      L2TP_IPSEC_MAX_SA_PER_PEER: ${L2TP_IPSEC_MAX_SA_PER_PEER:-}
+      L2TP_CONFIG: /etc/l2tp-go/server.toml
     healthcheck:
       test: ["CMD", "sh", "-c", "kill -0 1"]
       interval: 30s

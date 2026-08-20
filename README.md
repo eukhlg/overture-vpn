@@ -1,6 +1,6 @@
 # l2tp-go
 
-A lightweight Go L2TPv2 server under active development. The current server
+A lightweight Go L2TPv2 server. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
@@ -11,18 +11,14 @@ sessions as raw IPv4 packet streams without enabling TUN or host routing. See
 
 ## IPsec status
 
-The server includes an experimental IKEv1/IPsec implementation for protecting
-L2TP traffic on Linux. It has been successfully tested with the built-in
-L2TP/IPsec clients on Windows, Linux, and macOS using pre-shared-key
-authentication.
+The server includes an IKEv1/IPsec implementation that has been successfully
+tested with the built-in L2TP/IPsec clients on Windows, Linux, and macOS using
+pre-shared-key authentication.
 
 The implementation is functional but has not undergone an independent security
 audit or extensive production-scale testing. It is suitable for interoperability
 testing and controlled deployments, but should not yet be treated as a
 production security boundary.
-
-<details>
-<summary>IPsec capabilities and current limitations</summary>
 
 ### Supported capabilities
 
@@ -44,6 +40,9 @@ production security boundary.
 - Client-initiated Phase 1 replacement with child-SA ownership transfer
 - Raw ESP transport for native Linux deployments
 - Protected L2TP handoff restricted to authenticated UDP port 1701 traffic
+
+<details>
+<summary>Current limitations and protocol behavior</summary>
 
 The implementation intentionally rejects obsolete DH group 1 and MD5-based
 transforms.
@@ -94,117 +93,10 @@ listeners.
 
 </details>
 
+## Configuration
+
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
-
-## Docker Compose
-
-Docker deployment is intended for a Linux Docker host with `/dev/net/tun`.
-Docker Desktop on macOS does not expose a macOS `utun` device to Linux
-containers; use the native macOS instructions below instead.
-
-Create the environment file and change the password:
-
-```sh
-cp .env.example .env
-```
-
-Start the ready-to-route server:
-
-```sh
-docker compose up --build -d
-docker compose logs -f l2tp
-```
-
-The single Compose service publishes UDP 1701, UDP 500, and UDP 4500; grants
-`NET_ADMIN` and `NET_RAW`; mounts
-`/dev/net/tun`, enables IPv4 forwarding in the container namespace, and
-masquerades the configured client subnet through the interface selected by the
-container's IPv4 default route. `L2TP_NAT_INTERFACE` remains available as an
-explicit override.
-
-Docker cannot publish raw IP protocol 50 through a UDP/TCP port mapping. The
-default container therefore uses forced NAT-T for interoperable IPsec. Native
-Linux deployments may still use raw ESP. Set a real public server identity and
-PSK in `.env`, then start the same Compose service:
-
-```sh
-L2TP_IPSEC_PSK='replace-this' \
-L2TP_IPSEC_SERVER_ID='203.0.113.10' \
-docker compose up --build -d
-```
-
-Docker Desktop cannot provide the raw-ESP path, but UDP/4500 NAT-T remains the
-supported container path.
-
-During a normal Compose restart or stop, the server sends `StopCCN` to every
-active tunnel before closing UDP. Clients configured for automatic reconnect
-can therefore start a fresh tunnel promptly. An ungraceful process kill, host
-failure, or lost network cannot send this notification, so recovery time then
-depends on the client's own dead-peer timeout.
-
-Stop and remove it with:
-
-```sh
-docker compose down
-```
-
-To use a TOML file instead of `.env`, copy the complete example, edit the
-passwords, protect the file, and point the consolidated Compose service at it:
-
-```sh
-cp l2tp-go.toml.example l2tp-go.toml
-chmod 600 l2tp-go.toml
-L2TP_CONFIG_FILE=./l2tp-go.toml \
-L2TP_CONFIG=/etc/l2tp-go/server.toml \
-docker compose up --build -d
-```
-
-The override mounts `l2tp-go.toml` read-only at
-`/etc/l2tp-go/server.toml`. Docker NAT uses the resolved `[network]` and
-`[nat]` values from that same file.
-
-## Run with TUN routing
-
-Build the server:
-
-```sh
-go build -o l2tp-go ./cmd/l2tp-go
-```
-
-Settings may be supplied through TOML, environment variables, or command-line
-flags. Precedence is: built-in defaults, TOML, environment, then flags.
-
-```sh
-export L2TP_PASSWORD='replace-me'
-export L2TP_USERNAME='vpn'
-export L2TP_TUN_ENABLED='true'
-```
-
-Linux:
-
-```sh
-sudo -E ./l2tp-go \
-  -tun-name l2tp0
-```
-
-macOS (`-tun-name` may be omitted to select an available `utun`):
-
-```sh
-sudo -E ./l2tp-go \
-  -tun-name ''
-```
-
-The process creates the native interface, configures its address and MTU,
-forwards client packets into it, reads return packets, and sends those packets
-back through the matching PPP session. It brings the interface down during a
-clean shutdown.
-
-Native execution does not modify host IP forwarding or NAT. Configure those
-with the host firewall/router policy appropriate for the machine. The Docker
-entrypoint performs container-local NAT when `L2TP_NAT_ENABLED=true`.
-
-## Configuration
 
 The recommended starting point is [l2tp-go.toml.example](l2tp-go.toml.example).
 Run it natively with:
@@ -229,52 +121,111 @@ username = "bob"
 password = "replace-me-too"
 ```
 
-Keep the real file out of source control and readable only by its owner. The
-existing environment variables remain supported for compatibility and for
-temporary overrides:
+Server and pool-start settings accept either a full IPv4 address or a host
+offset within the subnet. For example, subnet `10.0.0.0/24`, server address
+`1`, pool start `100`, and pool size `50` produce server `10.0.0.1` and leases
+`10.0.0.100` through `10.0.0.149`.
 
-| Environment variable | Default | Purpose |
-|---|---:|---|
-| `L2TP_PASSWORD` | required unless `L2TP_USERS` is set | Password for the legacy single user |
-| `L2TP_USERNAME` | `vpn` | Username for the legacy single user |
-| `L2TP_USERS` | empty | Comma-separated `username=password` credentials |
-| `L2TP_AUTH` | `mschapv2` | PPP authentication: `mschapv2` or `pap` |
-| `L2TP_DEBUG` | `0` | Debug level: `0` off, `1` protocol/lifecycle, `2` per-packet tracing |
-| `L2TP_LISTEN` | `:1701` | UDP listen address |
-| `L2TP_HOSTNAME` | `l2tp-go` | Advertised L2TP host name |
-| `L2TP_CLIENT_SUBNET` | `10.0.0.0/24` | PPP client subnet and Docker NAT source |
-| `L2TP_SERVER_IP` | `1` | Server address or host offset inside the client subnet |
-| `L2TP_CLIENT_POOL_START` | `2` | First pool address or host offset |
-| `L2TP_CLIENT_POOL_SIZE` | `50` | Number of addresses in the client pool |
-| `L2TP_DNS` | `1.1.1.1` | DNS address offered through IPCP |
-| `L2TP_TUN_ENABLED` | `false` | Enable native TUN routing |
-| `L2TP_TUN_NAME` | automatic | Requested TUN interface name |
-| `L2TP_MTU` | `1400` | TUN MTU |
-| `L2TP_NAT_ENABLED` | `true` | Enable container NAT |
-| `L2TP_NAT_INTERFACE` | automatic | Docker outbound-interface override |
-| `L2TP_MAX_SESSIONS` | `50` | Global simultaneous-session limit |
-| `L2TP_MAX_SESSIONS_PER_TUNNEL` | `1` | Simultaneous sessions in one L2TP tunnel |
-| `L2TP_MAX_SESSIONS_PER_USER` | `1` | Authenticated sessions for one username |
-| `L2TP_IPSEC_ENABLED` | `false` | Enable experimental IKEv1 with raw ESP and NAT-T transport |
-| `L2TP_IPSEC_IKE_LISTEN` | `:500` | IKEv1 UDP listen address |
-| `L2TP_IPSEC_NATT_LISTEN` | `:4500` | Shared NAT-T IKE/ESP listen address |
-| `L2TP_IPSEC_ESP_LISTEN` | `0.0.0.0` | Raw ESP local IPv4 address |
-| `L2TP_IPSEC_PSK` | empty | IKEv1 pre-shared key |
-| `L2TP_IPSEC_SERVER_ID` | empty | Public IPv4 identity used by IKE |
-| `L2TP_IPSEC_MAX_SAS` | `1024` | Maximum simultaneous Phase 1 SAs |
-| `L2TP_IPSEC_FORCE_NATT` | `false` | Prefer UDP/4500 for NAT-T-capable clients even when NAT-D finds no NAT |
-| `L2TP_IPSEC_IKE_LIFETIME` | `8h` | Server maximum Phase 1 lifetime |
-| `L2TP_IPSEC_ESP_LIFETIME` | `1h` | Server maximum ESP lifetime |
-| `L2TP_IPSEC_DPD_INTERVAL` | `20s` | Proactive DPD interval; `0s` disables probes |
-| `L2TP_IPSEC_MAX_HALF_OPEN` | `128` | Maximum incomplete Main Mode exchanges |
-| `L2TP_IPSEC_MAX_SA_PER_PEER` | `4` | Maximum Phase 1 SAs for one client IP |
+```toml
+[network]
+subnet = "10.0.0.0/24"
+server_address = "1"
+client_pool_start = "2"
+client_pool_size = 50
+dns = "1.1.1.1"
+mtu = 1400
+```
 
-Both address settings accept a full IPv4 address or a host offset. For example,
-subnet `10.0.0.0/24`, server `1`, start `100`, and limit `50` produce server
-`10.0.0.1` and leases `10.0.0.100` through `10.0.0.149`. `L2TP_CLIENT_IP` is
-accepted as a deprecated single-client pool-start alias. The proposed
-`L2TP_CLIENT_SUBNET_START` and `L2TP_CLIENT_SUBNET_LIMIT` names are also
-accepted as compatibility aliases.
+Keep the real file out of source control and readable only by its owner. Legacy
+environment-variable overrides remain available for compatibility, but TOML is
+the primary and recommended configuration source.
+
+## Docker Compose
+
+Docker deployment is intended for a Linux Docker host with `/dev/net/tun`.
+Docker Desktop on macOS does not expose a macOS `utun` device to Linux
+containers; use the native macOS instructions below instead.
+
+Multi-platform images for `linux/amd64` and `linux/arm64` are published to both
+registries:
+
+- `eukhlg/l2tp-go` on Docker Hub
+- `ghcr.io/eukhlg/l2tp-go` on GitHub Container Registry
+
+Use `latest` for releases and `testing` for the newest feature-branch build.
+Copy the example configuration, set the PSK, server identity, and user
+passwords, then start the released image:
+
+```sh
+cp l2tp-go.toml.example l2tp-go.toml
+chmod 600 l2tp-go.toml
+docker compose pull
+docker compose up -d
+docker compose logs -f l2tp
+```
+
+To test the newest feature-branch image or use GHCR instead, select the image
+before pulling:
+
+```sh
+export L2TP_IMAGE=eukhlg/l2tp-go:testing
+# Or: export L2TP_IMAGE=ghcr.io/eukhlg/l2tp-go:testing
+docker compose pull
+docker compose up -d
+```
+
+For a local source build, bypass the registry with:
+
+```sh
+docker compose build
+docker compose up -d
+```
+
+To keep the configuration at another path, set the Compose-only
+`L2TP_CONFIG_FILE` variable:
+
+```sh
+L2TP_CONFIG_FILE=/srv/l2tp/server.toml docker compose up -d
+```
+
+Compose publishes UDP ports 1701, 500, and 4500, grants `NET_ADMIN` and
+`NET_RAW`, mounts `/dev/net/tun`, and enables container-local forwarding and
+NAT. Docker port publishing cannot expose raw IP protocol 50, so containers use
+UDP/4500 NAT-T; native Linux deployments may use raw ESP. A graceful stop sends
+`StopCCN` to active tunnels before shutdown.
+
+Stop and remove the service with `docker compose down`.
+
+## Run with TUN routing
+
+Build the server:
+
+```sh
+go build -o l2tp-go ./cmd/l2tp-go
+```
+
+Set `[tun].enabled = true` in the TOML configuration. Command-line flags can
+override TOML when needed.
+
+```sh
+sudo ./l2tp-go --config ./l2tp-go.toml
+```
+
+macOS (`-tun-name` may be omitted to select an available `utun`):
+
+```sh
+sudo ./l2tp-go --config ./l2tp-go.toml \
+  -tun-name ''
+```
+
+The process creates the native interface, configures its address and MTU,
+forwards client packets into it, reads return packets, and sends those packets
+back through the matching PPP session. It brings the interface down during a
+clean shutdown.
+
+Native execution does not modify host IP forwarding or NAT. Configure those
+with the host firewall/router policy appropriate for the machine. The Docker
+entrypoint performs container-local NAT when `[nat].enabled = true`.
 
 ## Client settings
 
@@ -283,20 +234,22 @@ key, the server's public IPv4 address, and MS-CHAPv2 PPP authentication. Permit
 UDP 500 and UDP 4500 through host and cloud firewalls; permit IP protocol 50
 for clients that do not need NAT traversal.
 
-For raw test operation, configure a client for L2TP without IPsec, with MS-CHAPv2 authentication (or
-PAP when `L2TP_AUTH=pap`), UDP port 1701, and the username/password from the environment. Many operating-system
-VPN user interfaces require IPsec for L2TP and will not offer raw L2TP; use a
-client such as `xl2tpd`/`pppd` that explicitly permits raw L2TP.
+For raw test operation, configure a client for L2TP without IPsec, with
+MS-CHAPv2 authentication (or PAP when `[authentication].method = "pap"`), UDP
+port 1701, and the configured username and password. Many operating-system VPN
+interfaces require IPsec for L2TP and will not offer raw L2TP; use a client
+such as `xl2tpd`/`pppd` that explicitly permits raw L2TP.
 
 Successful startup does not prove that UDP 1701 is reachable from outside the
 host. Verify host and cloud firewalls separately.
 
 ## Interoperability test matrix
 
-Run tests with `L2TP_DEBUG=1` and forced NAT-T first. Test the Windows
-built-in L2TP/IPsec client, NetworkManager-l2tp on Linux, and the macOS built-in
-L2TP over IPsec profile where available. Each client should be tested from a
-different NATed network and, when possible, from a directly addressed host.
+Run tests with `[server].debug = 1` and `[ipsec].force_natt = true` first. Test
+the Windows built-in L2TP/IPsec client, NetworkManager-l2tp on Linux, and the
+macOS built-in L2TP over IPsec profile where available. Each client should be
+tested from a different NATed network and, when possible, from a directly
+addressed host.
 
 For every platform verify: Main Mode and Quick Mode completion, UDP/4500
 migration, PPP authentication, assigned address and DNS, traffic through TUN,
@@ -327,10 +280,11 @@ IPv6 and packets without an active PPP destination may appear on TUN. They are
 dropped without stopping the server. A fatal listener or TUN error is logged
 with the component name before the process exits.
 
-For connection negotiation failures, enable tracing in `.env`:
+For connection negotiation failures, enable tracing in the TOML configuration:
 
-```env
-L2TP_DEBUG=1
+```toml
+[server]
+debug = 1
 ```
 
 Then recreate the container and follow its output:
