@@ -50,6 +50,9 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, err
 	}
+	bridge.SetAuthenticatedActivityHandler(func(cookie isakmp.Cookie, now time.Time) {
+		control.NotePeerActivity(cookie, now)
+	})
 	bridge.Tracef = tracef
 	raw, err := server.ListenRawESP(config.IPsec.ESPListen, bridge)
 	if err != nil {
@@ -72,7 +75,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		log.Printf("IPsec ESP SA established: peer=%s inbound_spi=%08x outbound_spi=%08x", peer, pair.Inbound.SPI, pair.Outbound.SPI)
 	}
 	ike.Established, natt.Established = established, established
-	lifecycle := func(_ context.Context, events []isakmp.LifecycleEvent) {
+	lifecycle := func(callbackContext context.Context, events []isakmp.LifecycleEvent) {
 		for _, event := range events {
 			switch event.Type {
 			case isakmp.LifecycleRebindIKE:
@@ -85,6 +88,12 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				log.Printf("IPsec ESP SA delete received: spis=%x", event.SPIs)
 			case isakmp.LifecycleDeleteIKE, isakmp.LifecycleExpireIKE:
 				registry.RemoveIKE(event.ResponderCookie)
+				for _, info := range bridge.CloseIKE(event.ResponderCookie) {
+					info.Protocol = "l2tp/ipsec"
+					if l2tpServer.SessionClosed != nil {
+						l2tpServer.SessionClosed(callbackContext, info)
+					}
+				}
 				log.Printf("IKEv1 SA retired: responder_cookie=%x reason=%d", event.ResponderCookie, event.Type)
 			}
 		}
