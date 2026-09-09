@@ -134,7 +134,18 @@ client_pool_start = "2"
 client_pool_size = 50
 dns = "1.1.1.1"
 mtu = 1400
+
+[limits]
+# Per source IP; set the rate to 0 to disable new-tunnel throttling.
+new_tunnels_per_second = 5
+new_tunnel_burst = 10
 ```
+
+New L2TP tunnel requests are limited with a per-source-IP token bucket. The
+default permits a burst of 10 new tunnels and refills at 5 tunnels per second;
+retransmissions belonging to an existing half-open tunnel do not consume
+additional capacity. Limiter source bookkeeping is bounded to resist spoofed
+source-address churn.
 
 Keep the real file out of source control and readable only by its owner. Legacy
 environment-variable overrides remain available for compatibility, but TOML is

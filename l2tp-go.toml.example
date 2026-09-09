@@ -51,3 +51,7 @@ max_sa_per_peer = 4
 sessions = 50
 sessions_per_tunnel = 1
 sessions_per_user = 1
+# Per-source-IP token bucket for new L2TP tunnel requests. Set the rate to 0
+# to disable it. Retransmissions of an existing half-open request are exempt.
+new_tunnels_per_second = 5
+new_tunnel_burst = 10

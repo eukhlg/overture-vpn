@@ -72,7 +72,7 @@ func main() {
 	default:
 		log.Fatalf("unsupported authentication method %q; use mschapv2 or pap", resolved.Authentication.Method)
 	}
-	serverConfig := server.Config{HostName: resolved.Server.Hostname, PPP: pppConfig, AddressPool: pool, MaxSessions: resolved.Limits.Sessions, MaxSessionsPerTunnel: resolved.Limits.SessionsPerTunnel, MaxSessionsPerUser: resolved.Limits.SessionsPerUser}
+	serverConfig := server.Config{HostName: resolved.Server.Hostname, PPP: pppConfig, AddressPool: pool, MaxSessions: resolved.Limits.Sessions, MaxSessionsPerTunnel: resolved.Limits.SessionsPerTunnel, MaxSessionsPerUser: resolved.Limits.SessionsPerUser, NewTunnelsPerSecond: resolved.Limits.NewTunnelsPerSecond, NewTunnelBurst: resolved.Limits.NewTunnelBurst}
 	if serverConfig.MaxSessions < 0 || serverConfig.MaxSessionsPerTunnel < 0 || serverConfig.MaxSessionsPerUser < 0 {
 		log.Fatal("session limits must be zero (unlimited) or positive")
 	}

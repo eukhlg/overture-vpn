@@ -57,9 +57,11 @@ type appConfig struct {
 		MaxSAsPerPeer int    `toml:"max_sa_per_peer"`
 	} `toml:"ipsec"`
 	Limits struct {
-		Sessions          int `toml:"sessions"`
-		SessionsPerTunnel int `toml:"sessions_per_tunnel"`
-		SessionsPerUser   int `toml:"sessions_per_user"`
+		Sessions            int     `toml:"sessions"`
+		SessionsPerTunnel   int     `toml:"sessions_per_tunnel"`
+		SessionsPerUser     int     `toml:"sessions_per_user"`
+		NewTunnelsPerSecond float64 `toml:"new_tunnels_per_second"`
+		NewTunnelBurst      int     `toml:"new_tunnel_burst"`
 	} `toml:"limits"`
 }
 
@@ -81,6 +83,7 @@ func defaultConfig() appConfig {
 	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
+	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10
 	return c
 }
 
@@ -203,6 +206,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.Network.MTU <= 0 || c.Limits.Sessions < 0 || c.Limits.SessionsPerTunnel < 0 || c.Limits.SessionsPerUser < 0 {
 		return networkConfig{}, nil, fmt.Errorf("MTU must be positive and session limits cannot be negative")
+	}
+	if c.Limits.NewTunnelsPerSecond < 0 || c.Limits.NewTunnelBurst < 0 {
+		return networkConfig{}, nil, fmt.Errorf("new tunnel rate limits cannot be negative")
 	}
 	if c.IPsec.MaxSAs < 0 || c.IPsec.MaxHalfOpen < 0 || c.IPsec.MaxSAsPerPeer < 0 {
 		return networkConfig{}, nil, fmt.Errorf("IPsec SA limits cannot be negative")

@@ -43,6 +43,9 @@ func TestIPsecConfigRequiresPSKAndIPv4Identity(t *testing.T) {
 	if c.IPsec.IKELifetime != "8h" || c.IPsec.ESPLifetime != "1h" || c.IPsec.DPDInterval != "20s" || c.IPsec.MaxHalfOpen != 128 || c.IPsec.MaxSAsPerPeer != 4 {
 		t.Fatalf("IPsec defaults=%#v", c.IPsec)
 	}
+	if c.Limits.NewTunnelsPerSecond != 5 || c.Limits.NewTunnelBurst != 10 {
+		t.Fatalf("new tunnel rate-limit defaults=%#v", c.Limits)
+	}
 }
 
 func TestIPsecConfigRejectsInvalidLifecycleDuration(t *testing.T) {
@@ -51,6 +54,16 @@ func TestIPsecConfigRejectsInvalidLifecycleDuration(t *testing.T) {
 	c.Authentication.Users = []userConfig{{Username: "vpn", Password: "secret"}}
 	c.IPsec.DPDInterval = "often"
 	if _, _, err := c.validate(); err == nil || !strings.Contains(err.Error(), "dpd_interval") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestConfigRejectsInvalidNewTunnelRateLimit(t *testing.T) {
+	clearConfigEnvironment(t)
+	c := defaultConfig()
+	c.Authentication.Users = []userConfig{{Username: "vpn", Password: "secret"}}
+	c.Limits.NewTunnelsPerSecond = -1
+	if _, _, err := c.validate(); err == nil || !strings.Contains(err.Error(), "new tunnel rate") {
 		t.Fatalf("error=%v", err)
 	}
 }
@@ -86,6 +99,10 @@ client_pool_size = 50
 [nat]
 enabled = false
 interface = "ens3"
+
+[limits]
+new_tunnels_per_second = 2.5
+new_tunnel_burst = 7
 `)
 	c, err := loadConfig(path)
 	if err != nil {
@@ -95,7 +112,7 @@ interface = "ens3"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Server.Hostname != "from-file" || c.NAT.Enabled || c.NAT.Interface != "ens3" || users["alice"] != "one" {
+	if c.Server.Hostname != "from-file" || c.NAT.Enabled || c.NAT.Interface != "ens3" || users["alice"] != "one" || c.Limits.NewTunnelsPerSecond != 2.5 || c.Limits.NewTunnelBurst != 7 {
 		t.Fatalf("config=%#v users=%#v", c, users)
 	}
 	if network.Server.String() != "10.20.0.1" || network.PoolStart.String() != "10.20.0.100" || network.PoolEnd.String() != "10.20.0.149" || network.TUNPrefix.String() != "10.20.0.1/24" {
