@@ -38,12 +38,12 @@ symlinks, old and new configuration mounts, the reserved client command, and raw
 L2TP server startup and graceful shutdown. Containers used an isolated network,
 no published host ports, and no added capabilities.
 
-## Remaining release checks
+## Published-release checks
 
 Both first library tags were resolved from the public Go proxy and checksum
 database, and their hashes match the reviewed snapshots. Overture passes
 race-enabled tests and vet against those public releases with GOWORK=off.
-The normal production Docker build must also pass using those public releases. The Docker
+The production multi-platform Docker build passed using those public releases. The Docker
 workflow retains both amd64 and arm64 targets and publishes new and legacy names.
 
 The supported Windows, Linux, and macOS client interoperability matrix and
@@ -64,7 +64,12 @@ separately during the cutover.
 - Both GHCR image packages are public and linked to the Overture application.
 - Migration pull request #1 was merged with its commits retained.
 
-The stable application release is published after the final main-branch checks.
+[Overture VPN v0.3.0](https://github.com/eukhlg/overture-vpn/releases/tag/v0.3.0)
+is published. Anonymous pulls verified both 0.3.0 and latest under all four image
+paths, with linux/amd64 and linux/arm64 in each index. All eight tags resolve to:
+
+`sha256:0536b373a659a9c188ab37726a919cd77b688ef4b1f389cd922d42631123f331`
+
 Docker Hub description synchronization uses the existing registry credential
 in GitHub Actions. During cutover this credential successfully published images
 but received HTTP 403 when editing descriptions. Metadata synchronization is
