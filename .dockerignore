@@ -2,3 +2,12 @@
 .gitignore
 *.test
 l2tp-go
+
+overture-vpn
+.env
+*.toml
+.migration
+modules
+go.work
+go.work.sum
+benchmarks

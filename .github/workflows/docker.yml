@@ -1,4 +1,4 @@
-name: Build and publish Docker image
+name: Build and publish Overture VPN images
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: read
@@ -47,6 +48,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
+            ghcr.io/eukhlg/overture-vpn
+            docker.io/eukhlg/overture-vpn
             ghcr.io/eukhlg/l2tp-go
             docker.io/eukhlg/l2tp-go
           flavor: |

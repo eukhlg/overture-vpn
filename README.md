@@ -1,13 +1,20 @@
-# l2tp-go
+# Overture VPN
 
 A lightweight Go L2TPv2 server. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-The protocol and server packages are also usable as a public Go module. Network
-frontends can inject their own packet connections and consume authenticated
-sessions as raw IPv4 packet streams without enabling TUN or host routing. See
-[Embedding l2tp-go](EMBEDDING.md).
+Overture uses two independent Go modules:
+
+- [l2tp-go](https://github.com/eukhlg/l2tp-go): L2TPv2, PPP, and the embeddable session engine
+- [ipsec-go](https://github.com/eukhlg/ipsec-go): IKEv1, ESP, NAT-T, and association lifecycle
+
+The application owns configuration, the protected L2TP adapter, native TUN
+routing, and deployment. See [embedding and architecture](EMBEDDING.md) and the
+[repository and registry migration](migration/README.md).
+
+The server can be started with `overture-vpn server`; flag-only invocations are
+also supported. Client mode is planned and is not implemented yet.
 
 ## IPsec status
 
@@ -98,11 +105,11 @@ listeners.
 The current release supports multiple users and automatically leases client
 addresses from a configured IPv4 pool.
 
-The recommended starting point is [l2tp-go.toml.example](l2tp-go.toml.example).
+The recommended starting point is [overture-vpn.toml.example](overture-vpn.toml.example).
 Run it natively with:
 
 ```sh
-sudo ./l2tp-go --config ./l2tp-go.toml
+sudo ./overture-vpn server --config ./overture-vpn.toml
 ```
 
 The configuration is strict: unknown TOML keys and invalid values stop startup
@@ -147,7 +154,8 @@ retransmissions belonging to an existing half-open tunnel do not consume
 additional capacity. Limiter source bookkeeping is bounded to resist spoofed
 source-address churn.
 
-Keep the real file out of source control and readable only by its owner. Legacy
+Keep the real file out of source control and readable only by its owner. `OVERTURE_CONFIG` selects a configuration file; `L2TP_CONFIG` is its legacy
+fallback, and an explicit `--config` takes precedence. Legacy
 environment-variable overrides remain available for compatibility, but TOML is
 the primary and recommended configuration source.
 
@@ -160,16 +168,22 @@ containers; use the native macOS instructions below instead.
 Multi-platform images for `linux/amd64` and `linux/arm64` are published to both
 registries:
 
-- `eukhlg/l2tp-go` on Docker Hub
-- `ghcr.io/eukhlg/l2tp-go` on GitHub Container Registry
+- `eukhlg/overture-vpn` on Docker Hub
+- `ghcr.io/eukhlg/overture-vpn` on GitHub Container Registry
+
+During the naming transition, the same compatible builds are also published as
+`eukhlg/l2tp-go` and `ghcr.io/eukhlg/l2tp-go`. Existing `L2TP_CONFIG`,
+`L2TP_IMAGE`, `L2TP_CONFIG_FILE`, and `/etc/l2tp-go/server.toml` mounts remain
+supported. The new Compose variables take precedence when set. Existing
+versioned image tags are retained.
 
 Use `latest` for releases and `testing` for the newest feature-branch build.
 Copy the example configuration, set the PSK, server identity, and user
 passwords, then start the released image:
 
 ```sh
-cp l2tp-go.toml.example l2tp-go.toml
-chmod 600 l2tp-go.toml
+cp overture-vpn.toml.example overture-vpn.toml
+chmod 600 overture-vpn.toml
 docker compose pull
 docker compose up -d
 docker compose logs -f l2tp
@@ -179,8 +193,8 @@ To test the newest feature-branch image or use GHCR instead, select the image
 before pulling:
 
 ```sh
-export L2TP_IMAGE=eukhlg/l2tp-go:testing
-# Or: export L2TP_IMAGE=ghcr.io/eukhlg/l2tp-go:testing
+export OVERTURE_IMAGE=eukhlg/overture-vpn:testing
+# Or: export OVERTURE_IMAGE=ghcr.io/eukhlg/overture-vpn:testing
 docker compose pull
 docker compose up -d
 ```
@@ -193,10 +207,10 @@ docker compose up -d
 ```
 
 To keep the configuration at another path, set the Compose-only
-`L2TP_CONFIG_FILE` variable:
+`OVERTURE_CONFIG_FILE` variable:
 
 ```sh
-L2TP_CONFIG_FILE=/srv/l2tp/server.toml docker compose up -d
+OVERTURE_CONFIG_FILE=/srv/l2tp/server.toml docker compose up -d
 ```
 
 Compose publishes UDP ports 1701, 500, and 4500, grants `NET_ADMIN` and
@@ -209,23 +223,24 @@ Stop and remove the service with `docker compose down`.
 
 ## Run with TUN routing
 
-Build the server:
+Build the server (after the library releases are published, or with the local
+workspace described in the migration guide):
 
 ```sh
-go build -o l2tp-go ./cmd/l2tp-go
+go build -o overture-vpn ./cmd/overture-vpn
 ```
 
 Set `[tun].enabled = true` in the TOML configuration. Command-line flags can
 override TOML when needed.
 
 ```sh
-sudo ./l2tp-go --config ./l2tp-go.toml
+sudo ./overture-vpn server --config ./overture-vpn.toml
 ```
 
 macOS (`-tun-name` may be omitted to select an available `utun`):
 
 ```sh
-sudo ./l2tp-go --config ./l2tp-go.toml \
+sudo ./overture-vpn server --config ./overture-vpn.toml \
   -tun-name ''
 ```
 
@@ -284,7 +299,7 @@ If Compose restarts the container, inspect both its status and previous logs:
 ```sh
 docker compose ps
 docker compose logs --tail=200 l2tp
-docker inspect --format '{{.State.ExitCode}} {{.State.Error}}' l2tp-go-l2tp-1
+docker inspect --format '{{.State.ExitCode}} {{.State.Error}}' overture-vpn-l2tp-1
 ```
 
 IPv6 and packets without an active PPP destination may appear on TUN. They are
