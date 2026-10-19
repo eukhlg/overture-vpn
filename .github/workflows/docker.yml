@@ -2,18 +2,18 @@ name: Build and publish Overture VPN images
 
 on:
   push:
-    branches-ignore:
-      - main
-    tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+"
+    branches: ["**"]
+  repository_dispatch:
+    types: [module-push]
+  release:
+    types: [published]
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: docker-${{ startsWith(github.ref, 'refs/tags/') && github.ref || 'testing' }}
+  group: docker-${{ github.event_name == 'release' && github.event.release.tag_name || 'testing' }}
   cancel-in-progress: true
 
 jobs:
@@ -23,6 +23,83 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate stable release version
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[] | select(.draft == false and .prerelease == false) | [.id, .tag_name] | @tsv' > /tmp/releases.tsv
+          python3 - <<'PYTHON'
+          import os, re
+          def version(tag):
+              match = re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag)
+              if not match:
+                  raise SystemExit("Stable releases require a numeric version, e.g. v0.4.0")
+              return tuple(map(int, match.groups()))
+          current = version(os.environ["RELEASE_TAG"])
+          if os.environ["PRERELEASE"] == "true":
+              raise SystemExit("Prereleases cannot publish latest")
+          for line in open("/tmp/releases.tsv"):
+              release_id, tag = line.strip().split("\t")
+              if release_id != os.environ["RELEASE_ID"] and re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+", tag):
+                  if current <= version(tag):
+                      raise SystemExit("Release version must exceed every previous stable release")
+          PYTHON
+
+      - name: Select testing module commits
+        if: github.event_name != 'release'
+        env:
+          SOURCE_REPO: ${{ github.event.client_payload.repository }}
+          SOURCE_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == repository_dispatch ]]; then
+            case "$SOURCE_REPO" in
+              eukhlg/l2tp-go|eukhlg/ipsec-go) ;;
+              *) echo 'Unexpected module repository'; exit 1 ;;
+            esac
+            [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          fi
+          for module in l2tp-go ipsec-go; do
+            repo="eukhlg/$module"
+            sha=$(git ls-remote "https://github.com/$repo.git" refs/heads/main | cut -f1)
+            if [[ "$SOURCE_REPO" == "$repo" ]]; then sha="$SOURCE_SHA"; fi
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            go get "github.com/$repo@$sha"
+            echo "$module: $sha" >> "$GITHUB_STEP_SUMMARY"
+            key=${module//-/_}
+            echo "$key=$sha" >> "$GITHUB_ENV"
+          done
+
+      - name: Test selected application and modules
+        env:
+          GOWORK: "off"
+        run: |
+          go test -race ./... github.com/eukhlg/l2tp-go/... github.com/eukhlg/ipsec-go/...
+          go vet ./...
+
+      - name: Record dependency versions
+        env:
+          GOWORK: "off"
+        run: |
+          go list -m all >> "$GITHUB_STEP_SUMMARY"
+          echo "Application commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          for module in l2tp-go ipsec-go; do
+            key=${module//-/_}
+            version=$(go list -m -f '{{.Version}}' "github.com/eukhlg/$module")
+            echo "${key}_version=$version" >> "$GITHUB_ENV"
+          done
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -55,10 +132,9 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=testing,enable=${{ startsWith(github.ref, 'refs/heads/') }}
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=testing,enable=${{ github.event_name != 'release' }}
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -67,6 +143,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            io.overture.l2tp-go.revision=${{ env.l2tp_go }}
+            io.overture.ipsec-go.revision=${{ env.ipsec_go }}
+            io.overture.l2tp-go.version=${{ env.l2tp_go_version }}
+            io.overture.ipsec-go.version=${{ env.ipsec_go_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

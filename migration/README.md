@@ -113,9 +113,26 @@ notice. Description synchronization is best effort: a token that can push images
 may still be unable to edit repository metadata. In that case, use Docker Hub
 to set the descriptions manually. Existing versioned images must remain available.
 
-Both numeric and v-prefixed application release tags are accepted. Libraries
-have test workflows only and never publish the application image. Branch builds
-still use `testing`; releases use their semantic version and `latest`.
+Every branch push in any of the three repositories requests a shared `testing`
+image in Docker Hub and GHCR. A library push sends a `module-push` repository
+dispatch to Overture using the encrypted `OVERTURE_DISPATCH_TOKEN` secret in each
+library repository. This credential needs permission to dispatch workflows in
+`eukhlg/overture-vpn` (repository contents write permission for a fine-grained
+token); rotate these secrets when the credential expires.
+
+Testing builds use the triggering repository's exact commit and the `main`
+commits of the other repositories. For library pushes, the application comes
+from its default branch. The selected module versions are resolved into the
+build's temporary `go.mod` and recorded in image labels and the workflow summary.
+Tests must pass before publication. All branches share `testing`; a newer build
+cancels an older testing build that is still running.
+
+Stable images are published only when an Overture GitHub release is published,
+using its tag and the library versions pinned in that application commit.
+Numeric and v-prefixed tags are accepted (for example `0.4.0` or `v0.4.0`). The
+version must exceed previous stable releases. Successful builds publish the
+numeric version and `latest`; a tag push alone does not publish stable images.
+Library releases do not change stable application images.
 
 Compatibility is retained for flag-only server invocations, the `/usr/local/bin/l2tp-go`
 executable, `/usr/local/bin/l2tp-entrypoint`, L2TP_* server environment overrides,
