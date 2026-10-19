@@ -1,10 +1,29 @@
+# Local configuration and credentials
 .env
-l2tp-go.toml
-/l2tp-go
+.env.*
+!.env.example
 /l2tp-go.toml
-
-/overture-vpn
 /overture-vpn.toml
-/.migration/
+
+# Application binaries and build output
+/l2tp-go
+/overture-vpn
+/bin/
+/dist/
+
+# Go workspace and test output
 /go.work
 /go.work.sum
+*.test
+/coverage.out
+/coverage.html
+
+# Local benchmarks and migration artifacts
+/benchmarks/
+/.migration/
+
+# OS metadata and editor temporary files
+.DS_Store
+*.swp
+*.swo
+*~

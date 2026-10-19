@@ -1,25 +1,51 @@
 # Overture VPN migration
 
-The original checkout becomes the Overture application and retains its complete
-Git history. The local library repositories are staged at `.migration/l2tp-go`
-and `.migration/ipsec-go`, each on `main`, with independently filtered history
-and a final extraction commit. They are separate Git repositories, not submodules.
-The untracked `benchmarks/` directory was left in place.
+The application checkout lives in `app/` and retains its complete Git history.
+The `l2tp-go/` and `ipsec-go/` checkouts are its siblings. Each directory is an
+independent Git repository, with its own branches and Go module. The containing
+`overture-vpn/` workspace directory has no Git repository.
 
 ## Local development
 
-The ignored `go.work` joins the application and the two local library checkouts.
+```text
+overture-vpn/
+├── go.work
+├── overture-vpn.code-workspace
+├── app/
+├── l2tp-go/
+└── ipsec-go/
+```
+
+The local `go.work` joins all three modules. From the workspace directory:
 
 ```sh
-go test ./... ./.migration/l2tp-go/... ./.migration/ipsec-go/...
-go build -o overture-vpn ./cmd/overture-vpn
+go test ./app/... ./l2tp-go/... ./ipsec-go/...
+go build -o app/overture-vpn ./app/cmd/overture-vpn
+cd app
 ./overture-vpn server --config ./overture-vpn.toml
 ```
 
-Once the repositories are published, developers can clone the three repositories
-as siblings and create an untracked workspace with `go work init . ../l2tp-go
-../ipsec-go`. Do not commit local `replace` directives
-to any module's go.mod.
+Open `overture-vpn.code-workspace` from the containing workspace directory in VS
+Code. It exposes the three repositories separately for staging, committing,
+branching, and pushing. The application's module path remains
+`github.com/eukhlg/overture-vpn`; its local directory name is `app`.
+
+For a fresh checkout:
+
+```sh
+mkdir overture-vpn
+cd overture-vpn
+git clone https://github.com/eukhlg/overture-vpn.git app
+git clone https://github.com/eukhlg/l2tp-go.git l2tp-go
+git clone https://github.com/eukhlg/ipsec-go.git ipsec-go
+go work init ./app ./l2tp-go ./ipsec-go
+```
+
+Add the three folders to a VS Code multi-root workspace and save it beside
+`go.work`. Both workspace files are local development files outside the Git
+repositories. Local library edits are used immediately. Application releases
+remain pinned to published versions in `app/go.mod`; do not commit local
+`replace` directives to any module's `go.mod`.
 
 Each library builds and tests independently with `GOWORK=off go test ./...`.
 Overture's independent build requires the new library releases listed in go.mod:
@@ -31,9 +57,9 @@ snapshots; Overture passes its independent tests against those public releases.
 ## History and recovery
 
 The baseline tag is `overture-migration-baseline` at the last combined commit.
-A complete pre-migration Git bundle is stored at `.migration/original-before-overture.bundle`
+A complete pre-migration Git bundle is stored at `../.migration/original-before-overture.bundle`
 (and initially at `/tmp/l2tp-before-overture.bundle`). Each prepared repository
-also has a Git bundle in `.migration/`. See [validation results](VALIDATION.md).
+also has a Git bundle in the workspace-level `.migration/` directory. See [validation results](VALIDATION.md).
 The original application's commits and old version tags are retained. Each
 library's filtered ancestors have different commit hashes; its history includes
 only the relevant protocol/runtime paths, followed by the extraction commit.
@@ -42,7 +68,7 @@ Old application tags are deliberately absent from the library repositories.
 `export-libraries.py` documents and automates the extraction from fresh clones.
 It accepts reviewed library source snapshots, a source repository, a baseline
 ref, and an empty destination. It never rewrites the source repository or pushes.
-The prepared `.migration` repositories can be used as its source snapshots if
+The sibling `../l2tp-go/` and `../ipsec-go/` repositories can be used as its source snapshots if
 another export is needed. It requires git-filter-repo on PATH.
 
 The source had no tracked license file at extraction time. No new license was
