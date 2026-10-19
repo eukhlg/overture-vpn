@@ -113,19 +113,42 @@ notice. Description synchronization is best effort: a token that can push images
 may still be unable to edit repository metadata. In that case, use Docker Hub
 to set the descriptions manually. Existing versioned images must remain available.
 
-Every branch push in any of the three repositories requests a shared `testing`
-image in Docker Hub and GHCR. A library push sends a `module-push` repository
-dispatch to Overture using the encrypted `OVERTURE_DISPATCH_TOKEN` secret in each
-library repository. This credential needs permission to dispatch workflows in
-`eukhlg/overture-vpn` (repository contents write permission for a fine-grained
-token); rotate these secrets when the credential expires.
+Image builds run after pushes to any branch in all three repositories:
 
-Testing builds use the triggering repository's exact commit and the `main`
-commits of the other repositories. For library pushes, the application comes
-from its default branch. The selected module versions are resolved into the
-build's temporary `go.mod` and recorded in image labels and the workflow summary.
-Tests must pass before publication. All branches share `testing`; a newer build
-cancels an older testing build that is still running.
+- A push/merge to `main` publishes shared `testing`, selecting the latest `main`
+  commits from all three repositories at build planning time.
+- A feature/fix branch push publishes `testing-<branch>`, using that exact pushed
+  commit and `main` from the other two repositories. Simple branch names such as
+  `new-auth` produce `testing-new-auth`. Names needing normalization (such as
+  `feature/auth`), or truncation, get a short hash suffix to prevent collisions.
+- Each image tag has its own build concurrency group. A newer build for the same
+  tag cancels an older in-progress build; different feature tags and shared
+  `testing` do not cancel each other. Tests must pass before publication.
+
+For a feature spanning multiple repositories, open Overture's **Build and publish
+Overture VPN images** workflow in GitHub Actions and select **Run workflow** on
+`main`. Supply a feature name and explicitly set `app_ref`, `l2tp_ref`, and
+`ipsec_ref` to the branches to combine (each defaults to `main`). For example,
+feature `auth-integration`, application `auth-ui`, L2TP `auth-ppp`, and IPsec
+`auth-ike` publish `testing-auth-integration`. Re-run this combined build after
+further feature changes. Automatic branch builds combine only the triggering
+feature with the other repositories' `main`; use a distinct combined feature
+name to keep that image separate from automatic branch images. No branch names
+are inferred across repositories. Missing branches fail the build.
+
+After testing a feature image, merge each participating branch into its repo's
+`main`. These merges rebuild shared `testing` from all three `main` branches.
+
+Libraries send a `module-push` repository dispatch containing their repository,
+branch name, and exact commit to Overture, using their encrypted
+`OVERTURE_DISPATCH_TOKEN` secret. This credential needs repository dispatch
+permission in `eukhlg/overture-vpn` (contents write for a fine-grained token).
+Rotate these secrets when the credential expires. Keep feature branches up to
+date with `main` so they contain the current notification/build workflows.
+
+The selected application and library commits are resolved before checkout and
+recorded in the workflow summary and image labels. Testing dependency versions
+are written only to the build's temporary `go.mod`.
 
 Stable images are published only when an Overture GitHub release is published,
 using its tag and the library versions pinned in that application commit.

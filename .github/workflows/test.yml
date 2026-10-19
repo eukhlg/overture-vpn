@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test image source and tag selection
+        run: python3 -m unittest discover -s .github/scripts -p "test_*.py"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
