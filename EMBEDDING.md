@@ -1,71 +1,56 @@
-# Embedding l2tp-go
+# Embedding the Overture libraries
 
-The repository is a public Go module:
+Overture VPN is the application. Its reusable protocol runtimes live in two
+independently versioned Go modules, neither of which imports the other.
 
-```go
-require github.com/eukhlg/l2tp-go <version>
-```
-
-Protocol and session code is independent from the standalone frontend:
-
-| Package | Responsibility |
+| Module/package | Responsibility |
 | --- | --- |
-| `protocol/isakmp` | IKEv1 control plane |
-| `protocol/esp` | ESP packet protection and replay checks |
-| `protocol/l2tp` | L2TPv2 wire format and control state |
-| `protocol/ppp` | PPP, PAP, MS-CHAPv2, and IPCP |
-| `server` | Embeddable listeners, sessions, IPsec bridge, and raw IPv4 callbacks |
-| `tun` | Optional native Linux/macOS TUN frontend support |
-| `cmd/l2tp-go` | Standalone TOML/environment/Docker application |
+| `github.com/eukhlg/l2tp-go/protocol/l2tp` | L2TPv2 wire format and control state |
+| `github.com/eukhlg/l2tp-go/protocol/ppp` | PPP, PAP, MS-CHAPv2, and IPCP |
+| `github.com/eukhlg/l2tp-go/server` | L2TP engine, UDP listener, address pool, session limits, and raw IPv4 callbacks |
+| `github.com/eukhlg/ipsec-go/protocol/isakmp` | IKEv1 control plane |
+| `github.com/eukhlg/ipsec-go/protocol/esp` | ESP protection, replay checks, and NAT-T framing |
+| `github.com/eukhlg/ipsec-go/server` | IKE/NAT-T/raw ESP listeners and association registry |
 
-## Injecting transports
-
-Embedding applications should create and own the socket policy, then inject a
-dedicated connection into the server:
+## L2TP packet boundary
 
 ```go
-conn, err := net.ListenPacket("udp", ":1701")
+service, err := server.New(conn, config) // dedicated net.PacketConn
 if err != nil {
-	return err
+    return err
 }
-
-service, err := server.New(conn, config)
-if err != nil {
-	return err
-}
+defer service.Close()
 service.SessionOpened = onSessionOpened
 service.SessionClosed = onSessionClosed
-service.RouteIPv4 = onIPv4
-
+service.RouteIPv4 = func(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
+    return packetStack.HandleIPv4(ctx, frame.IPv4, send)
+}
 return service.Serve(ctx)
 ```
 
-Equivalent injected constructors exist for IKE, NAT-T, and raw ESP:
+After PPP authentication and IPCP complete, `RouteIPv4` receives a validated raw
+IPv4 packet. Its retained `PacketWriter` replies to the same PPP session. `Close`
+closes the injected connection; shared sockets need dedicated wrappers.
 
-- `server.NewIKEServer`
-- `server.NewNATTServer`
-- `server.NewRawESPServer`
+## IPsec packet boundary
 
-The `Listen*` functions remain convenience constructors for the standalone
-frontend.
+`ipsec-go/server.NewIKEServer`, `NewNATTServer`, and `NewRawESPServer` accept
+injected packet connections. The ESP constructors take an `ESPPacketHandler`,
+which returns encrypted reply datagrams and an optional post-send `Dispatch`
+callback. Applications can use `ESPRegistry.Open` to authenticate and decrypt,
+retain its opaque association, and call `Seal` for replies. `Replacement` follows
+an overlapping rekey, while `Cookie` and `BelongsToIKE` support lifecycle cleanup.
 
-## Packet boundary
+The application must enforce its payload policy after decryption. Overture's
+`internal/l2tpipsec` adapter validates UDP/1701, hands L2TP datagrams to the L2TP
+engine, and closes protected sessions when their IKE owner is retired.
 
-After PPP authentication and IPCP complete, `Server.RouteIPv4` receives a
-validated raw IPv4 packet. Its `server.PacketWriter` callback sends a raw IPv4
-reply to that same session:
+The libraries do not parse TOML, create TUN devices, configure routes or NAT,
+or depend on Docker. Overture owns those application responsibilities.
 
-```go
-service.RouteIPv4 = func(ctx context.Context, frame server.DataFrame, write server.PacketWriter) error {
-	return packetStack.HandleIPv4(ctx, frame.IPv4, write)
-}
-```
+## Existing users
 
-`Server.Dispatch` makes this boundary independent of the outer transport. Raw
-L2TP and protected L2TP/IPsec use the same callbacks and differ only in the
-transport-specific final writer. This is the intended integration point for a
-sing-box/fuzz-box endpoint and its system or userspace packet stack.
-
-The reusable packages do not parse TOML or environment variables, create a TUN
-device, install routes, configure NAT, or depend on Docker. Those responsibilities
-remain in the standalone frontend or the embedding application.
+The L2TP and PPP import paths are retained. IPsec imports move from
+`github.com/eukhlg/l2tp-go` to `github.com/eukhlg/ipsec-go`. The former combined
+`server.ESPBridge` is application integration and now belongs to Overture.
+The `tun` package moves to `github.com/eukhlg/overture-vpn/tun`.

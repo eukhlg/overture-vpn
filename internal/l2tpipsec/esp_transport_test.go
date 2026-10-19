@@ -1,0 +1,119 @@
+package l2tpipsec
+
+import (
+	"bytes"
+	"context"
+	"net"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/eukhlg/ipsec-go/protocol/esp"
+	"github.com/eukhlg/ipsec-go/protocol/isakmp"
+	ipsec "github.com/eukhlg/ipsec-go/server"
+	"github.com/eukhlg/l2tp-go/protocol/l2tp"
+	"github.com/eukhlg/l2tp-go/server"
+)
+
+func TestNATTServerProtectedL2TPHandshake(t *testing.T) {
+	pair := testESPPair(isakmp.EncapsulationNATTTransport)
+	registry := ipsec.NewESPRegistry()
+	engine := server.NewEngine(server.Config{HostName: "server"})
+	bridge, _ := NewESPBridge(engine, registry)
+	listener, err := ipsec.ListenNATT("127.0.0.1:0", bridge.HandlePacket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- listener.Serve(ctx) }()
+	client, err := net.DialUDP("udp", nil, listener.Conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := registry.Install(client.LocalAddr(), pair); err != nil {
+		t.Fatal(err)
+	}
+	clientOut, _ := esp.NewSA(esp.SAConfig{SPI: pair.Inbound.SPI, Transform: pair.Transform, EncryptionKey: pair.Inbound.EncryptionKey, AuthenticationKey: pair.Inbound.AuthenticationKey, Random: bytes.NewReader(bytes.Repeat([]byte{7}, 256))})
+	clientIn, _ := esp.NewSA(esp.SAConfig{SPI: pair.Outbound.SPI, Transform: pair.Transform, EncryptionKey: pair.Outbound.EncryptionKey, AuthenticationKey: pair.Outbound.AuthenticationKey})
+	sccrq := l2tp.ControlMessage{Type: l2tp.SCCRQ, AVPs: []l2tp.AVP{l2tp.Uint16AVP(l2tp.AttrProtocolVersion, 0x0100, true), l2tp.StringAVP(l2tp.AttrHostName, "client", true), l2tp.Uint32AVP(l2tp.AttrFramingCap, 3, true), l2tp.Uint32AVP(l2tp.AttrBearerCap, 3, true), l2tp.Uint16AVP(l2tp.AttrAssignedTunnelID, 77, true)}}
+	channel := l2tp.NewControlChannel(0, 1)
+	l2tpWire, _ := channel.Queue(sccrq, time.Now())
+	protected, _ := clientOut.Seal(encodeUDP(40000, 1701, l2tpWire), esp.IPProtocolUDP)
+	_, _ = client.Write(esp.EncapsulateNATTESP(protected))
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buffer := make([]byte, 4096)
+	n, err := client.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind, payload := esp.ClassifyNATT(buffer[:n])
+	if kind != esp.NATTESP {
+		t.Fatalf("kind=%d", kind)
+	}
+	udp, _, err := clientIn.Open(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, reply, err := decodeUDP(udp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := l2tp.DecodeControlMessage(reply)
+	if err != nil || message.Type != l2tp.SCCRP {
+		t.Fatalf("message=%#v err=%v", message, err)
+	}
+	cancel()
+	_ = listener.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestNATTServerDemuxesIKEAndKeepalive(t *testing.T) {
+	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{
+		PreSharedKey: []byte("psk"), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, Data: []byte{192, 0, 2, 1}},
+		ResponderEndpoint: netip.MustParseAddrPort("192.0.2.1:500"), Random: bytes.NewReader(bytes.Repeat([]byte{0x77}, 2048)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, _ := NewESPBridge(server.NewEngine(server.Config{HostName: "server"}), ipsec.NewESPRegistry())
+	listener, err := ipsec.ListenNATTWithIKE("127.0.0.1:0", bridge.HandlePacket, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = listener.Serve(ctx) }()
+	client, err := net.DialUDP("udp", nil, listener.Conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, _ = client.Write([]byte{0xff})
+	transform := isakmp.Transform{Number: 1, ID: isakmp.TransformIKE, Attributes: []isakmp.Attribute{
+		isakmp.TVAttribute(isakmp.AttributeP1Encryption, isakmp.EncryptionAESCBC), isakmp.TVAttribute(isakmp.AttributeP1Hash, isakmp.HashSHA1),
+		isakmp.TVAttribute(isakmp.AttributeP1AuthMethod, isakmp.AuthPreSharedKey), isakmp.TVAttribute(isakmp.AttributeP1DHGroup, isakmp.DHGroup2), isakmp.TVAttribute(isakmp.AttributeP1KeyLength, 128),
+	}}
+	sa := isakmp.SecurityAssociation{DOI: isakmp.DOIIPsec, Situation: isakmp.SituationIdentityOnly, Proposals: []isakmp.Proposal{{Number: 1, ProtocolID: isakmp.ProtocolIKE, Transforms: []isakmp.Transform{transform}}}}
+	request, _ := (isakmp.Packet{InitiatorCookie: isakmp.Cookie{1}, Exchange: isakmp.ExchangeIdentityProtect, Payloads: []isakmp.Payload{sa}}).MarshalBinary()
+	_, _ = client.Write(esp.EncapsulateNATTIKE(request))
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buffer := make([]byte, 4096)
+	n, err := client.Read(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kind, reply := esp.ClassifyNATT(buffer[:n])
+	packet, decodeErr := isakmp.DecodePacket(reply)
+	if kind != esp.NATTIKE || decodeErr != nil || packet.ResponderCookie == (isakmp.Cookie{}) {
+		t.Fatalf("kind=%d packet=%#v error=%v", kind, packet, decodeErr)
+	}
+}

@@ -1,6 +1,6 @@
 services:
   l2tp:
-    image: ${L2TP_IMAGE:-eukhlg/l2tp-go:latest}
+    image: ${OVERTURE_IMAGE:-${L2TP_IMAGE:-eukhlg/overture-vpn:latest}}
     build: .
     restart: unless-stopped
     cap_add:
@@ -13,7 +13,7 @@ services:
       - "500:500/udp"
       - "4500:4500/udp"
     volumes:
-      - ${L2TP_CONFIG_FILE:-./l2tp-go.toml}:/etc/l2tp-go/server.toml:ro
+      - ${OVERTURE_CONFIG_FILE:-${L2TP_CONFIG_FILE:-./overture-vpn.toml}}:/etc/l2tp-go/server.toml:ro
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
