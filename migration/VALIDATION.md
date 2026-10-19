@@ -40,13 +40,16 @@ no published host ports, and no added capabilities.
 
 ## Remaining release checks
 
-Resolve the first library tags from the public Go proxy and compare their
-checksums to the reviewed snapshots before publishing Overture. The normal
-production Docker build must then pass using those public releases. The Docker
+Both first library tags were resolved from the public Go proxy and checksum
+database, and their hashes match the reviewed snapshots. Overture passes
+race-enabled tests and vet against those public releases with GOWORK=off.
+The normal production Docker build must also pass using those public releases. The Docker
 workflow retains both amd64 and arm64 targets and publishes new and legacy names.
 
 The supported Windows, Linux, and macOS client interoperability matrix and
 long-duration rekey behavior were not rerun against external clients during this
 migration. The existing local protocol/rekey/lifecycle regression tests passed.
-Remote repository renaming, repository creation, package settings, releases, and
-image pushes remain pending.
+The original repository has been renamed to eukhlg/overture-vpn. The new public
+library repositories and their first releases are published, with successful
+independent GitHub CI runs. Application CI and registry publication are checked
+separately during the cutover.

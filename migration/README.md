@@ -18,15 +18,15 @@ go build -o overture-vpn ./cmd/overture-vpn
 
 Once the repositories are published, developers can clone the three repositories
 as siblings and create an untracked workspace with `go work init . ../l2tp-go
-../ipsec-go`. Until the first library releases exist, explicit workspace replacements
-for the planned versions may be needed. Do not commit local `replace` directives
+../ipsec-go`. Do not commit local `replace` directives
 to any module's go.mod.
 
 Each library builds and tests independently with `GOWORK=off go test ./...`.
 Overture's independent build requires the new library releases listed in go.mod:
-`l2tp-go v0.3.0` and `ipsec-go v0.1.0`. They are planned versions, not claims that
-those versions are already published. Do not publish the app or its containers
-before these exact source snapshots are released and their checksums verified.
+[l2tp-go v0.3.0](https://github.com/eukhlg/l2tp-go/releases/tag/v0.3.0) and
+[ipsec-go v0.1.0](https://github.com/eukhlg/ipsec-go/releases/tag/v0.1.0). Both are
+published. The public Go proxy and checksum database match the reviewed source
+snapshots; Overture passes its independent tests against those public releases.
 
 ## History and recovery
 
