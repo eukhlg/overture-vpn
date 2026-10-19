@@ -65,5 +65,7 @@ separately during the cutover.
 - Migration pull request #1 was merged with its commits retained.
 
 The stable application release is published after the final main-branch checks.
-Docker Hub descriptions are synchronized using the existing registry credential
-in GitHub Actions; the legacy image receives an explicit migration notice.
+Docker Hub description synchronization uses the existing registry credential
+in GitHub Actions. During cutover this credential successfully published images
+but received HTTP 403 when editing descriptions. Metadata synchronization is
+therefore best effort; the prepared legacy migration notice is in docker/LEGACY.md.

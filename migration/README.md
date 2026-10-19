@@ -83,7 +83,9 @@ token write access to both names, make the new GHCR package public, and ensure
 both GHCR packages grant the Overture repository's workflow write access. Link
 both packages to the application; the old package should not follow the newly
 created L2TP library repository. Update registry descriptions with the migration
-notice. Existing versioned images must remain available.
+notice. Description synchronization is best effort: a token that can push images
+may still be unable to edit repository metadata. In that case, use Docker Hub
+to set the descriptions manually. Existing versioned images must remain available.
 
 Both numeric and v-prefixed application release tags are accepted. Libraries
 have test workflows only and never publish the application image. Branch builds

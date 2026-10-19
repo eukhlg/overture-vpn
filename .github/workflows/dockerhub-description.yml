@@ -24,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Update Overture image description
+        id: overture
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -32,6 +34,8 @@ jobs:
           short-description: Overture VPN — Go L2TP/IPsec server using independent protocol libraries.
           enable-url-completion: true
       - name: Publish legacy image migration notice
+        id: legacy
+        continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -39,3 +43,8 @@ jobs:
           repository: eukhlg/l2tp-go
           short-description: Legacy image name for Overture VPN. Use eukhlg/overture-vpn for new deployments.
           readme-filepath: docker/LEGACY.md
+      - name: Report registry metadata permissions
+        if: steps.overture.outcome != 'success' || steps.legacy.outcome != 'success'
+        run: |
+          echo "::warning::Docker Hub accepted image publishing but rejected a description update. Update descriptions manually or provide a registry credential authorized to edit repository metadata."
+          echo "Image publishing is independent of Docker Hub description updates." >> "$GITHUB_STEP_SUMMARY"
