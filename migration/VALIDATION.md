@@ -53,3 +53,17 @@ The original repository has been renamed to eukhlg/overture-vpn. The new public
 library repositories and their first releases are published, with successful
 independent GitHub CI runs. Application CI and registry publication are checked
 separately during the cutover.
+
+## Remote cutover verification
+
+- Both independent library CI runs passed before release tagging.
+- The application passed GitHub push and pull-request tests against the public library releases.
+- The production multi-platform image workflow passed on the migration branch.
+- Anonymous pulls of all four testing image paths returned the same index digest,
+  with both linux/amd64 and linux/arm64 manifests.
+- Both GHCR image packages are public and linked to the Overture application.
+- Migration pull request #1 was merged with its commits retained.
+
+The stable application release is published after the final main-branch checks.
+Docker Hub descriptions are synchronized using the existing registry credential
+in GitHub Actions; the legacy image receives an explicit migration notice.
