@@ -4,6 +4,8 @@ github.com/eukhlg/ipsec-go v0.1.1-0.20261020052519-24b1fb5f75a4 h1:wfDTbSpT+zM0L
 github.com/eukhlg/ipsec-go v0.1.1-0.20261020052519-24b1fb5f75a4/go.mod h1:xnFvXPfF/zFfVpYEVcmgKoudEVU19xQj7q1S3Pnou5I=
 github.com/eukhlg/ipsec-go v0.1.1-0.20261020053854-75df2b96456d h1:xVq1srdUMkbv1v/yYRl95gW5+M2zjMbdV0whFdQ8cb8=
 github.com/eukhlg/ipsec-go v0.1.1-0.20261020053854-75df2b96456d/go.mod h1:xnFvXPfF/zFfVpYEVcmgKoudEVU19xQj7q1S3Pnou5I=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261020063151-edbd59801dae h1:sFPFkPMcwNCzQ/rHv4IROJkGrVRG7e6kjlrI4lrhIAU=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261020063151-edbd59801dae/go.mod h1:xnFvXPfF/zFfVpYEVcmgKoudEVU19xQj7q1S3Pnou5I=
 github.com/eukhlg/l2tp-go v0.3.0 h1:x5RwGL98oi99QvHDDH7dSbVHFXViSwGZPYiJNoKln4Y=
 github.com/eukhlg/l2tp-go v0.3.0/go.mod h1:GQ3Sh9qv0ROdKdam/fEf161nS26ES+mtlOX49CAZ5CE=
 github.com/pelletier/go-toml/v2 v2.4.2 h1:M2fKKbmyvI+hGId/D0W64qDBMVhJnNR10O5gIbMc//Q=
