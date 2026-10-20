@@ -1,22 +1,35 @@
 name: Test Overture VPN
 on:
   push:
+    branches-ignore: [main]
   pull_request:
 permissions:
   contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
     steps:
       - uses: actions/checkout@v4
-      - name: Test image source and tag selection
-        run: python3 -m unittest discover -s .github/scripts -p "test_*.py"
+      - name: Load current dependency selection logic
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: .pipeline
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Select matching module branches for tests
+        id: sources
+        env:
+          IMAGE_MODE: ${{ (github.head_ref || github.ref_name) == 'main' && 'main' || 'feature' }}
+          IMAGE_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: python3 .pipeline/.github/scripts/image_plan.py
+      - name: Use selected modules for this test run
+        env:
+          L2TP_SHA: ${{ steps.sources.outputs.l2tp_sha }}
+          IPSEC_SHA: ${{ steps.sources.outputs.ipsec_sha }}
+        run: go get "github.com/eukhlg/l2tp-go@$L2TP_SHA" "github.com/eukhlg/ipsec-go@$IPSEC_SHA"
       - run: go test -race ./...
-        env:
-          GOWORK: "off"
       - run: go vet ./...
-        env:
-          GOWORK: "off"

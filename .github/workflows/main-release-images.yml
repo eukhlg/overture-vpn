@@ -1,0 +1,16 @@
+name: Build main and release images
+run-name: ${{ github.event_name == 'release' && format('Release image - {0}', github.event.release.tag_name) || 'Build shared testing image' }}
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      mode: ${{ github.event_name == 'release' && 'release' || 'main' }}
+    secrets: inherit

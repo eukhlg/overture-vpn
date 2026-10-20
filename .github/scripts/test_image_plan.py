@@ -1,70 +1,82 @@
+import subprocess
 import unittest
-from image_plan import REPOS, feature_tag, plan
+from unittest.mock import patch
+from image_plan import MissingRef, REPOS, feature_tag, plan, selection, resolve
 
 
 class ImagePlanTests(unittest.TestCase):
-    def setUp(self):
-        self.calls = []
+    branch = 'codex/packet-buffer-reuse'
 
-    def resolve(self, repo, ref):
-        self.calls.append((repo, ref))
-        return {REPOS['app']: 'a', REPOS['l2tp']: 'b', REPOS['ipsec']: 'c'}[repo] * 40
+    def resolver(self, branches):
+        def lookup(repo, ref):
+            if ref != 'main' and repo not in branches:
+                raise MissingRef(ref)
+            return ('a' if ref == 'main' else 'b') * 40
+        return lookup
 
-    def test_app_feature_uses_exact_commit_and_main_libraries(self):
-        result = plan('push', {'ref': 'refs/heads/new-auth', 'after': 'd' * 40}, self.resolve)
-        self.assertEqual(result, dict(tag='testing-new-auth', app_sha='d' * 40, l2tp_sha='b' * 40, ipsec_sha='c' * 40))
-        self.assertEqual(self.calls, [(REPOS['l2tp'], 'main'), (REPOS['ipsec'], 'main')])
+    def test_manual_feature_combines_all_matching_branches(self):
+        result = plan('feature', self.branch, resolve_ref=self.resolver(set(REPOS.values())))
+        self.assertEqual(result['tag'], 'testing-packet-buffer-reuse')
+        for key in REPOS:
+            self.assertEqual(result[key + '_ref'], self.branch)
+            self.assertEqual(result[key + '_sha'], 'b' * 40)
 
-    def test_main_uses_latest_main_in_all_repos(self):
-        result = plan('push', {'ref': 'refs/heads/main', 'after': 'd' * 40}, self.resolve)
+    def test_all_partial_feature_combinations_fall_back_only_where_missing(self):
+        for mask in range(1, 8):
+            present = {repo for i, repo in enumerate(REPOS.values()) if mask & (1 << i)}
+            result = plan('feature', self.branch, resolve_ref=self.resolver(present))
+            for key, repo in REPOS.items():
+                self.assertEqual(result[key + '_ref'], self.branch if repo in present else 'main')
+
+    def test_typo_without_any_matching_branch_fails(self):
+        with self.assertRaisesRegex(ValueError, 'No repository'):
+            plan('feature', self.branch, resolve_ref=self.resolver(set()))
+
+    def test_main_build_selects_all_main(self):
+        result = plan('main', resolve_ref=self.resolver(set()))
         self.assertEqual(result['tag'], 'testing')
-        self.assertEqual(result['app_sha'], 'a' * 40)
-        self.assertEqual(self.calls, [(repo, 'main') for repo in REPOS.values()])
+        for key in REPOS:
+            self.assertEqual(result[key + '_ref'], 'main')
 
-    def test_each_library_feature_keeps_its_exact_commit(self):
-        for source in ('l2tp', 'ipsec'):
-            with self.subTest(source=source):
-                result = plan('repository_dispatch', {'client_payload': {'repository': REPOS[source], 'branch': 'new-auth', 'sha': 'd' * 40}}, self.resolve)
-                self.assertEqual(result['tag'], 'testing-new-auth')
-                self.assertEqual(result[source + '_sha'], 'd' * 40)
-                self.assertEqual(result['app_sha'], 'a' * 40)
+    def test_manual_feature_cannot_overwrite_shared_testing(self):
+        with self.assertRaises(ValueError):
+            selection('feature', 'main')
 
-    def test_library_main_is_shared_testing(self):
-        result = plan('repository_dispatch', {'client_payload': {'repository': REPOS['ipsec'], 'branch': 'main', 'sha': 'd' * 40}}, self.resolve)
-        self.assertEqual(result['tag'], 'testing')
-        self.assertEqual(result['ipsec_sha'], 'c' * 40)
+    def test_release_uses_tag_and_preserves_pinned_libraries(self):
+        calls = []
+        def lookup(repo, ref):
+            calls.append((repo, ref))
+            return 'a' * 40
+        result = plan('release', release_tag='v0.4.0', resolve_ref=lookup)
+        self.assertEqual(result['tag'], '0.4.0')
+        self.assertEqual(result['ipsec_ref'], 'pinned')
+        self.assertEqual(result['l2tp_sha'], '')
+        self.assertEqual(calls, [(REPOS['app'], 'refs/tags/v0.4.0')])
 
-    def test_manual_combined_feature_resolves_all_explicit_branches(self):
-        result = plan('workflow_dispatch', {'inputs': {'feature': 'new-auth', 'app_ref': 'auth-ui', 'l2tp_ref': 'auth-ppp', 'ipsec_ref': 'auth-ike'}}, self.resolve)
-        self.assertEqual(result['tag'], 'testing-new-auth')
-        self.assertEqual(self.calls, [(REPOS['app'], 'auth-ui'), (REPOS['l2tp'], 'auth-ppp'), (REPOS['ipsec'], 'auth-ike')])
+    def test_network_failure_never_falls_back_to_main(self):
+        def lookup(repo, ref):
+            raise subprocess.CalledProcessError(128, ['git'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            plan('feature', self.branch, resolve_ref=lookup)
 
-    def test_release_uses_tag_and_leaves_pinned_modules(self):
-        result = plan('release', {'release': {'tag_name': 'v0.4.0'}}, self.resolve)
-        self.assertEqual(result, dict(tag='0.4.0', app_sha='a' * 40, l2tp_sha='', ipsec_sha=''))
-        self.assertEqual(self.calls, [(REPOS['app'], 'refs/tags/v0.4.0')])
+    def test_lookup_distinguishes_missing_branch_from_network_error(self):
+        with patch('image_plan.subprocess.run', side_effect=[subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0, stdout='')]):
+            with self.assertRaises(MissingRef):
+                resolve(REPOS['app'], self.branch)
+        with patch('image_plan.subprocess.run', side_effect=subprocess.CalledProcessError(128, ['git'])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                resolve(REPOS['app'], self.branch)
 
-    def test_normalized_feature_names_cannot_collide(self):
-        names = ['feature/auth', 'feature-auth', 'Feature-auth', 'feature_auth', 'a' * 200]
-        tags = [feature_tag(name) for name in names]
-        self.assertEqual(len(set(tags)), len(tags))
-        for tag in tags:
-            self.assertLessEqual(len(tag), 128)
-            self.assertRegex(tag, r'^testing-[a-z0-9_.-]+$')
-            self.assertNotEqual(tag, 'testing')
+    def test_invalid_input_rejected(self):
+        for mode, branch, tag in [('auto-feature', self.branch, ''), ('feature', '', ''),
+                                  ('feature', 'a\nb', ''), ('feature', 'refs/heads/a', ''),
+                                  ('release', '', 'v0.4.0-rc1')]:
+            with self.subTest(mode=mode, branch=branch, tag=tag), self.assertRaises(ValueError):
+                selection(mode, branch, tag)
 
-    def test_reject_invalid_events_and_payloads(self):
-        cases = [
-            ('push', {'ref': 'refs/tags/v0.4.0', 'after': 'a' * 40}),
-            ('push', {'ref': 'refs/heads/auth', 'after': 'a' * 40, 'deleted': True}),
-            ('push', {'ref': 'refs/heads/auth', 'after': 'invalid'}),
-            ('repository_dispatch', {'client_payload': {'repository': 'other/repo', 'branch': 'main', 'sha': 'a' * 40}}),
-            ('release', {'release': {'tag_name': 'v0.4.0-rc1'}}),
-            ('workflow_dispatch', {'inputs': {'feature': ''}}),
-        ]
-        for event, payload in cases:
-            with self.subTest(event=event, payload=payload), self.assertRaises(ValueError):
-                plan(event, payload, self.resolve)
+    def test_simple_tags(self):
+        self.assertEqual(feature_tag(self.branch), 'testing-packet-buffer-reuse')
+        self.assertEqual(feature_tag('new-auth'), 'testing-new-auth')
 
 
 if __name__ == '__main__':

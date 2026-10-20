@@ -1,30 +1,18 @@
-name: Build and publish Overture VPN images
-
+name: Publish selected image (internal)
 on:
-  push:
-    branches: ["**"]
-  repository_dispatch:
-    types: [module-push]
-  release:
-    types: [published]
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      feature:
-        description: Feature name for testing-<feature>
+      mode:
         required: true
         type: string
-      app_ref:
-        description: Overture branch (or refs/tags/<tag>)
-        default: main
+      branch:
+        default: ""
         type: string
-      l2tp_ref:
-        description: L2TP branch (or refs/tags/<tag>)
-        default: main
-        type: string
-      ipsec_ref:
-        description: IPsec branch (or refs/tags/<tag>)
-        default: main
-        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 permissions:
   contents: read
@@ -32,25 +20,36 @@ permissions:
 
 jobs:
   plan:
-    if: github.event_name != 'push' || github.event.deleted != true
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       app_sha: ${{ steps.plan.outputs.app_sha }}
       l2tp_sha: ${{ steps.plan.outputs.l2tp_sha }}
       ipsec_sha: ${{ steps.plan.outputs.ipsec_sha }}
+      app_ref: ${{ steps.plan.outputs.app_ref }}
+      l2tp_ref: ${{ steps.plan.outputs.l2tp_ref }}
+      ipsec_ref: ${{ steps.plan.outputs.ipsec_ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Test image selection
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Select image tag and source commits
         id: plan
+        env:
+          IMAGE_MODE: ${{ inputs.mode }}
+          IMAGE_BRANCH: ${{ inputs.branch }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: python3 .github/scripts/image_plan.py
 
   docker:
     needs: plan
     runs-on: ubuntu-latest
     concurrency:
-      group: docker-${{ needs.plan.outputs.tag }}
-      cancel-in-progress: true
+      group: docker-${{ inputs.mode == 'release' && 'stable' || needs.plan.outputs.tag }}
+      cancel-in-progress: false
+      queue: max
     env:
       GOWORK: "off"
 
@@ -66,7 +65,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Validate stable release version
-        if: github.event_name == 'release'
+        if: inputs.mode == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -92,7 +91,7 @@ jobs:
           PYTHON
 
       - name: Select testing module commits
-        if: github.event_name != 'release'
+        if: inputs.mode != 'release'
         env:
           L2TP_SHA: ${{ needs.plan.outputs.l2tp_sha }}
           IPSEC_SHA: ${{ needs.plan.outputs.ipsec_sha }}
@@ -101,11 +100,15 @@ jobs:
           echo "l2tp_go=$L2TP_SHA" >> "$GITHUB_ENV"
           echo "ipsec_go=$IPSEC_SHA" >> "$GITHUB_ENV"
 
-      - name: Test selected application and modules
-        env:
-          GOWORK: "off"
+      - name: Test L2TP
+        run: go test -race github.com/eukhlg/l2tp-go/...
+
+      - name: Test IPsec
+        run: go test -race github.com/eukhlg/ipsec-go/...
+
+      - name: Test application
         run: |
-          go test -race ./... github.com/eukhlg/l2tp-go/... github.com/eukhlg/ipsec-go/...
+          go test -race ./...
           go vet ./...
 
       - name: Record dependency versions
@@ -152,9 +155,9 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=${{ needs.plan.outputs.tag }},enable=${{ github.event_name != 'release' }}
-            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ needs.plan.outputs.tag }},enable=${{ inputs.mode != 'release' }}
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ inputs.mode == 'release' }}
+            type=raw,value=latest,enable=${{ inputs.mode == 'release' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6
@@ -168,6 +171,9 @@ jobs:
             org.opencontainers.image.revision=${{ needs.plan.outputs.app_sha }}
             io.overture.l2tp-go.revision=${{ env.l2tp_go }}
             io.overture.ipsec-go.revision=${{ env.ipsec_go }}
+            io.overture.app.branch=${{ needs.plan.outputs.app_ref }}
+            io.overture.l2tp-go.branch=${{ needs.plan.outputs.l2tp_ref }}
+            io.overture.ipsec-go.branch=${{ needs.plan.outputs.ipsec_ref }}
             io.overture.l2tp-go.version=${{ env.l2tp_go_version }}
             io.overture.ipsec-go.version=${{ env.ipsec_go_version }}
           cache-from: type=gha

@@ -1,83 +1,88 @@
-"""Resolve image inputs before building; only main events may publish testing."""
-import hashlib
-import json
+"""One feature branch name selects all components; absent branches use main."""
 import os
 import re
 import subprocess
 
-REPOS = {"app": "eukhlg/overture-vpn", "l2tp": "eukhlg/l2tp-go", "ipsec": "eukhlg/ipsec-go"}
+REPOS = {'app': 'eukhlg/overture-vpn', 'l2tp': 'eukhlg/l2tp-go', 'ipsec': 'eukhlg/ipsec-go'}
 
 
-def feature_tag(name):
-    if not name or "\n" in name or "\r" in name:
-        raise ValueError("A feature name is required")
-    slug = re.sub(r"[^a-z0-9_.-]+", "-", name.lower()).strip(".-") or "feature"
-    if slug != name or len(slug) > 100:
-        slug = slug[:90] + "-" + hashlib.sha256(name.encode()).hexdigest()[:8]
-    return "testing-" + slug
+class MissingRef(ValueError):
+    pass
+
+
+def feature_tag(branch):
+    name = branch.removeprefix('codex/')
+    slug = re.sub(r'[^a-z0-9_.-]+', '-', name.lower()).strip('.-')
+    if not slug or len(slug) > 120:
+        raise ValueError('Feature name must produce a nonempty image tag of at most 120 characters')
+    return 'testing-' + slug
+
+
+def selection(mode, branch='', release_tag=''):
+    if mode == 'release':
+        if not re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', release_tag):
+            raise ValueError('A numeric stable release version is required')
+        return release_tag.removeprefix('v'), 'refs/tags/' + release_tag
+    if mode == 'main':
+        return 'testing', 'main'
+    if mode != 'feature':
+        raise ValueError('Unknown image mode')
+    if not branch or branch == 'main' or branch.startswith(('-', 'refs/')) or any(c.isspace() for c in branch):
+        raise ValueError('Enter a feature branch such as codex/packet-buffer-reuse')
+    return feature_tag(branch), branch
 
 
 def resolve(repo, ref):
-    # Explicit branches or tags, never an ambiguous short ref or shell command.
-    if not ref.startswith(("refs/heads/", "refs/tags/")):
-        ref = "refs/heads/" + ref
-    subprocess.run(["git", "check-ref-format", ref], check=True, capture_output=True)
-    result = subprocess.run(
-        ["git", "ls-remote", "https://github.com/" + repo + ".git", ref, ref + "^{}"],
-        check=True, capture_output=True, text=True,
-    )
-    refs = dict(line.split("\t", 1)[::-1] for line in result.stdout.splitlines())
-    sha = refs.get(ref + "^{}", refs.get(ref, ""))
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise ValueError(f"Cannot resolve {repo} {ref}")
+    if not ref.startswith(('refs/heads/', 'refs/tags/')):
+        ref = 'refs/heads/' + ref
+    subprocess.run(['git', 'check-ref-format', ref], check=True, capture_output=True)
+    # No-match is distinct from network/auth failures: only a missing branch
+    # permits fallback. Never silently replace a failed remote lookup with main.
+    result = subprocess.run(['git', 'ls-remote', 'https://github.com/' + repo + '.git', ref, ref + '^{}'],
+                            check=True, capture_output=True, text=True)
+    refs = dict(line.split('\t', 1)[::-1] for line in result.stdout.splitlines())
+    sha = refs.get(ref + '^{}', refs.get(ref))
+    if sha is None:
+        raise MissingRef(f'{repo} has no {ref}')
+    if not re.fullmatch(r'[0-9a-f]{40}', sha):
+        raise ValueError(f'Invalid commit for {repo} {ref}')
     return sha
 
 
-def plan(event_name, event, resolve_ref=resolve):
-    if event_name == "release":
-        tag = event["release"]["tag_name"]
-        if not re.fullmatch(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
-            raise ValueError("A numeric stable release version is required")
-        return {"tag": tag.removeprefix("v"), "app_sha": resolve_ref(REPOS["app"], "refs/tags/" + tag), "l2tp_sha": "", "ipsec_sha": ""}
-    refs = dict.fromkeys(REPOS, "main")
-    exact = {}
-    if event_name == "workflow_dispatch":
-        inputs = event["inputs"]
-        tag = feature_tag(inputs["feature"])
-        refs = {key: inputs.get(key + "_ref") or "main" for key in REPOS}
-    else:
-        if event_name == "push":
-            if not event["ref"].startswith("refs/heads/") or event.get("deleted"):
-                raise ValueError("Only branch pushes build testing images")
-            branch = event["ref"].removeprefix("refs/heads/")
-            source = "app"
-            sha = event["after"]
-        elif event_name == "repository_dispatch":
-            payload = event["client_payload"]
-            source = next((key for key in ("l2tp", "ipsec") if REPOS[key] == payload["repository"]), None)
-            if source is None:
-                raise ValueError("Unexpected module repository")
-            branch, sha = payload["branch"], payload["sha"]
-            if not branch or "\n" in branch or "\r" in branch:
-                raise ValueError("Invalid source branch")
-        else:
-            raise ValueError("Unexpected image event")
-        if not re.fullmatch(r"[0-9a-f]{40}", sha):
-            raise ValueError("Invalid source commit")
-        tag = "testing" if branch == "main" else feature_tag(branch)
-        if branch != "main":
-            exact[source] = sha
-    result = {"tag": tag}
-    for key, repo in REPOS.items():
-        result[key + "_sha"] = exact[key] if key in exact else resolve_ref(repo, refs[key])
+def plan(mode, branch='', release_tag='', resolve_ref=resolve):
+    tag, branch = selection(mode, branch, release_tag)
+    if mode == 'release':
+        return dict(tag=tag, app_sha=resolve_ref(REPOS['app'], branch), app_ref=branch,
+                    l2tp_sha='', l2tp_ref='pinned', ipsec_sha='', ipsec_ref='pinned')
+    result = {'tag': tag}
+    matched = False
+    for component, repo in REPOS.items():
+        ref = branch
+        try:
+            sha = resolve_ref(repo, ref)
+            matched = True
+        except MissingRef:
+            if mode == 'main':
+                raise
+            ref = 'main'
+            sha = resolve_ref(repo, ref)
+        result[component + '_sha'] = sha
+        result[component + '_ref'] = ref
+    if not matched:
+        raise ValueError(f'No repository has feature branch {branch!r}')
     return result
 
 
-if __name__ == "__main__":
-    with open(os.environ["GITHUB_EVENT_PATH"]) as stream:
-        selected = plan(os.environ["GITHUB_EVENT_NAME"], json.load(stream))
-    with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+if __name__ == '__main__':
+    mode = os.environ['IMAGE_MODE']
+    branch = os.environ.get('IMAGE_BRANCH', '')
+    release_tag = os.environ.get('RELEASE_TAG', '')
+    selected = plan(mode, branch, release_tag)
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         for key, value in selected.items():
-            print(f"{key}={value}", file=stream)
-    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
-        print("Image selection: ```" + json.dumps(selected, sort_keys=True) + "```", file=stream)
+            print(f'{key}={value}', file=stream)
+    with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+        print('## Image: `' + selected['tag'] + '`\n', file=stream)
+        print('| Component | Selected branch | Commit |\n|---|---|---|', file=stream)
+        for component in REPOS:
+            print(f'| {component} | `{selected[component + "_ref"]}` | `{selected[component + "_sha"] or "pinned in go.mod"}` |', file=stream)

@@ -1,0 +1,19 @@
+name: Build feature image
+run-name: Build feature image - ${{ inputs.branch }}
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Full feature branch name, for example codex/packet-buffer-reuse
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      mode: feature
+      branch: ${{ inputs.branch }}
+    secrets: inherit
