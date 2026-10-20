@@ -59,8 +59,11 @@ func (r *Router) RouteIPv4(_ context.Context, frame server.DataFrame, send serve
 // Run reads return traffic from TUN and dispatches it to the PPP session whose
 // negotiated client address matches the IPv4 destination.
 func (r *Router) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	stopped := make(chan struct{})
+	defer func() { cancel(); <-stopped }()
 	buffer := make([]byte, 65535)
-	go func() { <-ctx.Done(); _ = r.device.Close() }()
+	go func() { defer close(stopped); <-ctx.Done(); _ = r.device.Close() }()
 	for {
 		n, err := r.device.Read(buffer)
 		if err != nil {
@@ -71,6 +74,9 @@ func (r *Router) Run(ctx context.Context) error {
 		}
 		packet := append([]byte(nil), buffer[:n]...)
 		if err := r.dispatch(packet); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			// TUN interfaces can receive IPv6 and transient packets for which no
 			// PPP route exists. Neither condition is fatal to the routing loop.
 			if errors.Is(err, ErrInvalidPacket) || errors.Is(err, ErrNoRoute) {

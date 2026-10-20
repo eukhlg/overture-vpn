@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/eukhlg/ipsec-go/protocol/esp"
@@ -22,6 +23,10 @@ type ipsecRuntime struct {
 	registry  *ipsec.ESPRegistry
 	control   *isakmp.ControlPlane
 	done      chan error
+	sender    *l2tpipsec.ESPSender
+	cancel    context.CancelFunc
+	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server) (*ipsecRuntime, error) {
@@ -46,7 +51,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	if err != nil {
 		return nil, fmt.Errorf("listen IKE: %w", err)
 	}
-	registry := ipsec.NewESPRegistry()
+	registry, err := ipsec.NewESPRegistryWithConfig(ipsec.ESPRegistryConfig{ReplayWindowSize: uint32(config.IPsec.ReplayWindowSize)})
+	if err != nil {
+		_ = ike.Close()
+		return nil, fmt.Errorf("create ESP registry: %w", err)
+	}
 	bridge, err := l2tpipsec.NewESPBridge(l2tpServer.Engine, registry)
 	if err != nil {
 		_ = ike.Close()
@@ -55,7 +64,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	bridge.SetAuthenticatedActivityHandler(func(cookie isakmp.Cookie, now time.Time) {
 		control.NotePeerActivity(cookie, now)
 	})
-	bridge.Tracef = tracef
+	bridge.Tracef, bridge.Debugf = tracef, debugf
 	raw, err := ipsec.ListenRawESP(config.IPsec.ESPListen, bridge.HandlePacket)
 	if err != nil {
 		_ = ike.Close()
@@ -109,21 +118,19 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_, err := conn.WriteTo(payload, datagram.Peer)
 		return err
 	}
-	send := func(datagram ipsec.ESPDatagram) error {
-		if datagram.NATT {
-			_, err := natt.Conn.WriteTo(datagram.Payload, datagram.Peer)
-			return err
-		}
-		peer := datagram.Peer
-		if udp, ok := peer.(*net.UDPAddr); ok {
-			peer = &net.IPAddr{IP: udp.IP}
-		}
-		_, err := raw.Conn.WriteTo(datagram.Payload, peer)
-		return err
+	ctx, cancel := context.WithCancel(ctx)
+	sender, err := l2tpipsec.NewESPSender(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity)
+	if err != nil {
+		cancel()
+		_ = raw.Close()
+		_ = natt.Close()
+		_ = ike.Close()
+		return nil, err
 	}
+	bridge.Sender = sender
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		return l2tpServer.Dispatch(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, _, _ uint16, payload []byte) error {
-			datagram, err := bridge.SealL2TP(peer, payload)
+			err := bridge.SendL2TP(peer, payload)
 			if err != nil {
 				if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
 					if debugf != nil {
@@ -133,15 +140,26 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				}
 				return err
 			}
-			return send(datagram)
+			return nil
 		})
 	}
 	bridge.HandleResult = handleResult
-	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 3)}
-	go func() { runtime.done <- ike.Serve(ctx) }()
-	go func() { runtime.done <- raw.Serve(ctx) }()
-	go func() { runtime.done <- natt.Serve(ctx) }()
+	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, cancel: cancel}
+	runtime.wg.Add(5)
+	serve := func(run func(context.Context) error) {
+		defer runtime.wg.Done()
+		err := run(ctx)
+		if ctx.Err() != nil {
+			err = nil
+		}
+		runtime.done <- err
+	}
+	go serve(ike.Serve)
+	go serve(raw.Serve)
+	go serve(natt.Serve)
+	go func() { defer runtime.wg.Done(); runtime.done <- <-sender.Done() }()
 	go func() {
+		defer runtime.wg.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
@@ -170,17 +188,21 @@ func (r *ipsecRuntime) Close() {
 	if r == nil {
 		return
 	}
-	for _, datagram := range r.control.Shutdown() {
-		payload := datagram.Payload
-		conn := r.ike.Conn
-		if datagram.NATT {
-			payload = esp.EncapsulateNATTIKE(payload)
-			conn = r.natt.Conn
+	r.closeOnce.Do(func() {
+		// Bound best-effort IKE delete writes before interrupting data transmission.
+		_ = r.ike.Conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+		_ = r.natt.Conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
+		for _, datagram := range r.control.Shutdown() {
+			payload, conn := datagram.Payload, r.ike.Conn
+			if datagram.NATT {
+				payload, conn = esp.EncapsulateNATTIKE(payload), r.natt.Conn
+			}
+			_, _ = conn.WriteTo(payload, datagram.Peer)
 		}
-		_, _ = conn.WriteTo(payload, datagram.Peer)
-	}
-	_ = r.ike.Close()
-	_ = r.esp.Close()
-	_ = r.natt.Close()
-	r.registry.Close()
+		r.cancel()
+		r.sender.Close()
+		_ = r.ike.Close()
+		r.wg.Wait()
+		r.registry.Close()
+	})
 }

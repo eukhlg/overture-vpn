@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eukhlg/ipsec-go/protocol/esp"
+	ipsec "github.com/eukhlg/ipsec-go/server"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -42,19 +44,20 @@ type appConfig struct {
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
 	IPsec struct {
-		Enabled       bool   `toml:"enabled"`
-		IKEListen     string `toml:"ike_listen"`
-		NATTListen    string `toml:"natt_listen"`
-		ESPListen     string `toml:"esp_listen"`
-		PreSharedKey  string `toml:"pre_shared_key"`
-		ServerID      string `toml:"server_id"`
-		MaxSAs        int    `toml:"max_sas"`
-		ForceNATT     bool   `toml:"force_natt"`
-		IKELifetime   string `toml:"ike_lifetime"`
-		ESPLifetime   string `toml:"esp_lifetime"`
-		DPDInterval   string `toml:"dpd_interval"`
-		MaxHalfOpen   int    `toml:"max_half_open"`
-		MaxSAsPerPeer int    `toml:"max_sa_per_peer"`
+		Enabled          bool   `toml:"enabled"`
+		IKEListen        string `toml:"ike_listen"`
+		NATTListen       string `toml:"natt_listen"`
+		ESPListen        string `toml:"esp_listen"`
+		PreSharedKey     string `toml:"pre_shared_key"`
+		ServerID         string `toml:"server_id"`
+		MaxSAs           int    `toml:"max_sas"`
+		ForceNATT        bool   `toml:"force_natt"`
+		ReplayWindowSize int    `toml:"replay_window_size"`
+		IKELifetime      string `toml:"ike_lifetime"`
+		ESPLifetime      string `toml:"esp_lifetime"`
+		DPDInterval      string `toml:"dpd_interval"`
+		MaxHalfOpen      int    `toml:"max_half_open"`
+		MaxSAsPerPeer    int    `toml:"max_sa_per_peer"`
 	} `toml:"ipsec"`
 	Limits struct {
 		Sessions            int     `toml:"sessions"`
@@ -82,6 +85,7 @@ func defaultConfig() appConfig {
 	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
 	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
+	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10
 	return c
@@ -166,6 +170,9 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideBool("L2TP_IPSEC_FORCE_NATT", &c.IPsec.ForceNATT); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_IPSEC_REPLAY_WINDOW_SIZE", &c.IPsec.ReplayWindowSize); err != nil {
+		return err
+	}
 	overrideString("L2TP_IPSEC_IKE_LIFETIME", &c.IPsec.IKELifetime)
 	overrideString("L2TP_IPSEC_ESP_LIFETIME", &c.IPsec.ESPLifetime)
 	overrideString("L2TP_IPSEC_DPD_INTERVAL", &c.IPsec.DPDInterval)
@@ -212,6 +219,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.IPsec.MaxSAs < 0 || c.IPsec.MaxHalfOpen < 0 || c.IPsec.MaxSAsPerPeer < 0 {
 		return networkConfig{}, nil, fmt.Errorf("IPsec SA limits cannot be negative")
+	}
+	if size := c.IPsec.ReplayWindowSize; size < esp.ReplayWindowSize || size > esp.MaxReplayWindowSize || size%64 != 0 {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.replay_window_size must be a multiple of 64 between %d and %d", esp.ReplayWindowSize, esp.MaxReplayWindowSize)
 	}
 	for name, value := range map[string]string{"ike_lifetime": c.IPsec.IKELifetime, "esp_lifetime": c.IPsec.ESPLifetime, "dpd_interval": c.IPsec.DPDInterval} {
 		duration, err := time.ParseDuration(value)
