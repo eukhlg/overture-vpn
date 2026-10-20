@@ -1,4 +1,4 @@
-"""One feature branch name selects all components; absent branches use main."""
+"""Resolve explicitly selected GitHub branches to immutable image inputs."""
 import os
 import re
 import subprocess
@@ -18,7 +18,7 @@ def feature_tag(branch):
     return 'testing-' + slug
 
 
-def selection(mode, branch='', release_tag=''):
+def selection(mode, branch='', release_tag='', image_name=''):
     if mode == 'release':
         if not re.fullmatch(r'v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', release_tag):
             raise ValueError('A numeric stable release version is required')
@@ -27,9 +27,15 @@ def selection(mode, branch='', release_tag=''):
         return 'testing', 'main'
     if mode != 'feature':
         raise ValueError('Unknown image mode')
-    if not branch or branch == 'main' or branch.startswith(('-', 'refs/')) or any(c.isspace() for c in branch):
-        raise ValueError('Enter a feature branch such as codex/packet-buffer-reuse')
-    return feature_tag(branch), branch
+    validate_branch(branch)
+    if image_name and (image_name.startswith(('-', 'refs/')) or any(c.isspace() for c in image_name)):
+        raise ValueError('Use a simple image name without spaces')
+    return feature_tag(image_name or branch), branch
+
+
+def validate_branch(branch):
+    if not branch or branch.startswith(('-', 'refs/')) or any(c.isspace() for c in branch):
+        raise ValueError('Enter a GitHub branch name, for example main or codex/udp-batching')
 
 
 def resolve(repo, ref):
@@ -49,27 +55,20 @@ def resolve(repo, ref):
     return sha
 
 
-def plan(mode, branch='', release_tag='', resolve_ref=resolve):
-    tag, branch = selection(mode, branch, release_tag)
+def plan(mode, branch='', release_tag='', resolve_ref=resolve,
+         l2tp_branch='main', ipsec_branch='main', image_name=''):
+    tag, branch = selection(mode, branch, release_tag, image_name)
     if mode == 'release':
         return dict(tag=tag, app_sha=resolve_ref(REPOS['app'], branch), app_ref=branch,
                     l2tp_sha='', l2tp_ref='pinned', ipsec_sha='', ipsec_ref='pinned')
+    refs = dict.fromkeys(REPOS, 'main') if mode == 'main' else dict(app=branch, l2tp=l2tp_branch, ipsec=ipsec_branch)
     result = {'tag': tag}
-    matched = False
     for component, repo in REPOS.items():
-        ref = branch
-        try:
-            sha = resolve_ref(repo, ref)
-            matched = True
-        except MissingRef:
-            if mode == 'main':
-                raise
-            ref = 'main'
-            sha = resolve_ref(repo, ref)
-        result[component + '_sha'] = sha
+        ref = refs[component]
+        validate_branch(ref)
+        # An absent selected branch is an error; never substitute another branch.
+        result[component + '_sha'] = resolve_ref(repo, ref)
         result[component + '_ref'] = ref
-    if not matched:
-        raise ValueError(f'No repository has feature branch {branch!r}')
     return result
 
 
@@ -77,7 +76,10 @@ if __name__ == '__main__':
     mode = os.environ['IMAGE_MODE']
     branch = os.environ.get('IMAGE_BRANCH', '')
     release_tag = os.environ.get('RELEASE_TAG', '')
-    selected = plan(mode, branch, release_tag)
+    selected = plan(mode, branch, release_tag,
+                    l2tp_branch=os.environ.get('L2TP_BRANCH', 'main'),
+                    ipsec_branch=os.environ.get('IPSEC_BRANCH', 'main'),
+                    image_name=os.environ.get('IMAGE_NAME', ''))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         for key, value in selected.items():
             print(f'{key}={value}', file=stream)

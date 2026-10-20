@@ -5,7 +5,16 @@ on:
       mode:
         required: true
         type: string
-      branch:
+      app_branch:
+        default: main
+        type: string
+      l2tp_branch:
+        default: main
+        type: string
+      ipsec_branch:
+        default: main
+        type: string
+      image_name:
         default: ""
         type: string
     secrets:
@@ -39,7 +48,10 @@ jobs:
         id: plan
         env:
           IMAGE_MODE: ${{ inputs.mode }}
-          IMAGE_BRANCH: ${{ inputs.branch }}
+          IMAGE_BRANCH: ${{ inputs.app_branch }}
+          L2TP_BRANCH: ${{ inputs.l2tp_branch }}
+          IPSEC_BRANCH: ${{ inputs.ipsec_branch }}
+          IMAGE_NAME: ${{ inputs.image_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: python3 .github/scripts/image_plan.py
 

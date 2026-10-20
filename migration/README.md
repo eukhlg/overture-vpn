@@ -113,40 +113,44 @@ notice. Description synchronization is best effort: a token that can push images
 may still be unable to edit repository metadata. In that case, use Docker Hub
 to set the descriptions manually. Existing versioned images must remain available.
 
-Feature images are built deliberately, after all component code is pushed:
+Feature images are built deliberately from three independent GitHub branches:
 
-1. Work on the same full branch name in each repository you change, for example
-   `codex/packet-buffer-reuse`.
-2. Commit and push all component changes. Pushes run code tests; library and app
-   feature pushes do not request image builds.
-3. In Overture's GitHub Actions, select **Build feature image**, click **Run
-   workflow**, leave the workflow branch as `main`, and enter the full feature
-   branch name in the single input field.
-4. One build combines the latest matching branch in the app, L2TP, and IPsec. A
-   component without that branch uses `main`. If no repo has the feature branch,
-   the build fails instead of publishing an accidental all-main feature image.
-5. After tests pass, pull `eukhlg/overture-vpn:testing-packet-buffer-reuse` from
-   Docker Hub or `ghcr.io/eukhlg/overture-vpn:testing-packet-buffer-reuse`.
+1. Commit and push the app and module changes you want to build. Only code on
+   GitHub is available; local workspace branches and uncommitted files are not.
+2. In Overture's GitHub Actions, select **Build feature image**, click **Run
+   workflow**, and leave the workflow itself on `main`.
+3. Enter **App branch**, **l2tp-go branch**, and **ipsec-go branch** independently.
+   Each field defaults to `main`. Names do not have to match. For example:
 
-Tags drop the optional `codex/` prefix. Other invalid tag characters become `-`
-and letters become lowercase. Use unique feature names to keep tags distinct.
-Only code pushed to GitHub is included. No manual module-version bump or mapping
-file is required for a feature build. Its summary shows the branch and exact
-commit selected for all three components; these also appear in image labels.
+   | Component | Selected branch |
+   |---|---|
+   | App | `codex/udp-batching` |
+   | l2tp-go | `codex/packet-buffer-reuse` |
+   | ipsec-go | `codex/udp-batching` |
 
-**Build main and release images** is automatic: an app `main` push rebuilds
-shared `testing` from all three `main` branches. Merge library features first
-and the app last so that final app merge includes the library changes. Library
-pushes never request images; if only libraries change, manually re-run the latest
-successful main build after merging them to refresh shared `testing`.
+4. Optionally supply an image name, such as `udp-batching`. The default name is
+   the selected app branch. The optional `codex/` prefix is dropped and `testing-`
+   is added, producing `testing-udp-batching`. Other invalid tag characters become
+   `-` and letters become lowercase. A manual all-main build uses `testing-main`,
+   keeping the shared `testing` and stable release tags separate.
+5. One build resolves the latest pushed commit from each selected branch, tests
+   that exact combination, and publishes it to Docker Hub and GHCR. The summary
+   and image labels record all three branch names and immutable commit IDs.
 
-**Publish selected image (internal)** is the shared build implementation, called
-by the manual and automatic workflows. It has no independent push or dispatch
-trigger. Builds for the same tag are serialized without interrupting an active
-publication. There is no collection window, cross-repository dispatch, or
-per-feature setup. The old app image workflow and library image-notification
-workflows are disabled on GitHub so old copies in existing branches stay inert.
-Independent library test workflows remain enabled.
+There is no branch matching, fallback, workspace task, or automatic branch
+creation. A nonexistent selected branch fails clearly; it never substitutes
+`main` silently. Dependencies and their test checksums are prepared inside the
+build without changing the committed module files. Independent source CI uses
+versions committed in the app's `go.mod`; the manual integration build tests the
+specific combination selected in its form.
+
+Feature and library pushes run code tests only and never request an image.
+**Build main and release images** remains automatic: an app `main` push rebuilds
+shared `testing` from all three `main` branches. Merge library changes first and
+the app last. Publishing an app release builds its numbered image and `latest`
+with the app's pinned library versions. **Publish selected image (internal)**
+is the shared implementation and has no independent push or dispatch trigger.
+Legacy automatic library image requests remain retired.
 
 Stable images are published only when an Overture GitHub release is published,
 using its tag and the library versions pinned in that application commit.

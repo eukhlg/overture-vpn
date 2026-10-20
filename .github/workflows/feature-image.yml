@@ -1,11 +1,26 @@
 name: Build feature image
-run-name: Build feature image - ${{ inputs.branch }}
+run-name: Build feature image - ${{ inputs.image_name || inputs.app_branch }}
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: Full feature branch name, for example codex/packet-buffer-reuse
+      app_branch:
+        description: App branch to build
         required: true
+        default: main
+        type: string
+      l2tp_branch:
+        description: l2tp-go branch to build
+        required: true
+        default: main
+        type: string
+      ipsec_branch:
+        description: ipsec-go branch to build
+        required: true
+        default: main
+        type: string
+      image_name:
+        description: Optional image name (defaults to app branch; testing- is added)
+        required: false
         type: string
 permissions:
   contents: read
@@ -15,5 +30,8 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       mode: feature
-      branch: ${{ inputs.branch }}
+      app_branch: ${{ inputs.app_branch }}
+      l2tp_branch: ${{ inputs.l2tp_branch }}
+      ipsec_branch: ${{ inputs.ipsec_branch }}
+      image_name: ${{ inputs.image_name }}
     secrets: inherit
