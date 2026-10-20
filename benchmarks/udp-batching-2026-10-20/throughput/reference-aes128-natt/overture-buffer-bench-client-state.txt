@@ -1,0 +1,44 @@
+src 172.29.231.3 dst 172.29.231.2
+	proto esp spi 0xc69c8d95(3332148629) reqid 1(0x00000001) mode transport
+	replay-window 0 seq 0x00000000 flag  (0x00000000)
+	auth-trunc hmac(sha1) [redacted-test-key] (160 bits) 96
+	enc cbc(aes) [redacted-test-key] (128 bits)
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
+	lastused 2026-10-20 12:41:54
+	anti-replay context: seq 0x0, oseq 0x10, bitmap 0x00000000
+	sel src 172.29.231.3/32 dst 172.29.231.2/32 uid 0
+	lifetime config:
+	  limit: soft (INF)(bytes), hard (INF)(bytes)
+	  limit: soft (INF)(packets), hard (INF)(packets)
+	  expire add: soft 0(sec), hard 0(sec)
+	  expire use: soft 0(sec), hard 0(sec)
+	lifetime current:
+	  816(bytes), 16(packets)
+	  add 2026-10-20 12:41:49 use 2026-10-20 12:41:50
+	stats:
+	  replay-window 0 replay 0 failed 0
+src 172.29.231.2 dst 172.29.231.3
+	proto esp spi 0xc13a8472(3241837682) reqid 1(0x00000001) mode transport
+	replay-window 0 seq 0x00000000 flag  (0x00000000)
+	auth-trunc hmac(sha1) [redacted-test-key] (160 bits) 96
+	enc cbc(aes) [redacted-test-key] (128 bits)
+	encap type espinudp sport 4500 dport 4500 addr 0.0.0.0
+	lastused 2026-10-20 12:41:54
+	anti-replay esn context:
+	 seq-hi 0x0, seq 0x12, oseq-hi 0x0, oseq 0x0
+	 replay_window 1024, bitmap-length 32
+	 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+	 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+	 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 
+	 00000000 00000000 00000000 00000000 00000000 00000000 00000000 0003ffff 
+	sel src 172.29.231.2/32 dst 172.29.231.3/32 uid 0
+	lifetime config:
+	  limit: soft (INF)(bytes), hard (INF)(bytes)
+	  limit: soft (INF)(packets), hard (INF)(packets)
+	  expire add: soft 0(sec), hard 0(sec)
+	  expire use: soft 0(sec), hard 0(sec)
+	lifetime current:
+	  798(bytes), 18(packets)
+	  add 2026-10-20 12:41:49 use 2026-10-20 12:41:50
+	stats:
+	  replay-window 0 replay 0 failed 0

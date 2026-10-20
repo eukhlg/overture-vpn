@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-20",
+  "go": "go1.25.4",
+  "host": "Apple M1 Max, macOS ARM64",
+  "benchmark_runtime": "Linux ARM64 Docker Desktop VM, GOMAXPROCS 10",
+  "baseline": {
+    "app": "4577364a60409185ee926b40aab0b24b2458161e",
+    "ipsec-go": "feee1956200eb146d490ff53eb254cf94b8c7735",
+    "l2tp-go": "feaddd1614c2e6912c8a84316ed0d154fc35280f"
+  },
+  "binary_sha256": {
+    "before-vpn": "374c4bba2201e3c9dd6dcc529ba4798e3134e076b2580faa3b9f8ff4659c1087",
+    "after-vpn": "79bad91903e290859d8879e89b7fa12d63d45ce5f7f1f4fef51344c4904cea65"
+  },
+  "mtu": 1400,
+  "replay_window": 1024,
+  "trials_per_direction": 2,
+  "duration_seconds": 10,
+  "omit_seconds": 2
+}

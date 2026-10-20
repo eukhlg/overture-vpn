@@ -1,0 +1,13 @@
+strace: Process 64 attached
+strace: Process 65 attached
+strace: Process 66 attached
+strace: Process 67 attached
+strace: Process 68 attached
+strace: Process 69 attached
+strace: Process 70 attached
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 61.07    0.184593          59      3126           sendmmsg
+ 38.93    0.117666          30      3831       270 recvmmsg
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.302259          43      6957       270 total

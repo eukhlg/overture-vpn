@@ -19,7 +19,8 @@
 /coverage.html
 
 # Local benchmarks and migration artifacts
-/benchmarks/
+/benchmarks/*
+!/benchmarks/udp-batching-2026-10-20/
 /.migration/
 
 # OS metadata and editor temporary files

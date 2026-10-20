@@ -1,0 +1,1 @@
+Verified cipher, replay windows and measured both directions.
