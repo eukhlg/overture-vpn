@@ -51,7 +51,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	if err != nil {
 		return nil, fmt.Errorf("listen IKE: %w", err)
 	}
-	registry := ipsec.NewESPRegistry()
+	registry, err := ipsec.NewESPRegistryWithConfig(ipsec.ESPRegistryConfig{ReplayWindowSize: uint32(config.IPsec.ReplayWindowSize)})
+	if err != nil {
+		_ = ike.Close()
+		return nil, fmt.Errorf("create ESP registry: %w", err)
+	}
 	bridge, err := l2tpipsec.NewESPBridge(l2tpServer.Engine, registry)
 	if err != nil {
 		_ = ike.Close()

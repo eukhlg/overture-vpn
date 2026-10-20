@@ -145,7 +145,7 @@ func main() {
 		}
 		defer ipsec.Close()
 		ipsecDone = ipsec.done
-		log.Printf("IKEv1 listeners started on %s and NAT-T %s; server ID %s force_natt=%t lifetimes=%s/%s dpd=%s limits=%d/%d/%d", resolved.IPsec.IKEListen, resolved.IPsec.NATTListen, resolved.IPsec.ServerID, resolved.IPsec.ForceNATT, resolved.IPsec.IKELifetime, resolved.IPsec.ESPLifetime, resolved.IPsec.DPDInterval, resolved.IPsec.MaxSAs, resolved.IPsec.MaxHalfOpen, resolved.IPsec.MaxSAsPerPeer)
+		log.Printf("IKEv1 listeners started on %s and NAT-T %s; server ID %s force_natt=%t replay_window=%d lifetimes=%s/%s dpd=%s limits=%d/%d/%d", resolved.IPsec.IKEListen, resolved.IPsec.NATTListen, resolved.IPsec.ServerID, resolved.IPsec.ForceNATT, resolved.IPsec.ReplayWindowSize, resolved.IPsec.IKELifetime, resolved.IPsec.ESPLifetime, resolved.IPsec.DPDInterval, resolved.IPsec.MaxSAs, resolved.IPsec.MaxHalfOpen, resolved.IPsec.MaxSAsPerPeer)
 	}
 	if cleanup != nil {
 		defer cleanup(context.Background())

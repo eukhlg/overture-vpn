@@ -41,6 +41,9 @@ pre_shared_key = "replace-me"
 server_id = "203.0.113.10"
 max_sas = 1024
 force_natt = true
+# Receive replay window, in packets: multiples of 64 from 64 through 1024.
+# Optional environment override: L2TP_IPSEC_REPLAY_WINDOW_SIZE.
+replay_window_size = 1024
 ike_lifetime = "8h"
 esp_lifetime = "1h"
 dpd_interval = "20s"
