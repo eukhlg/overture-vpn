@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"sync"
 
+	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/server"
 )
 
@@ -22,22 +23,32 @@ type SendIPv4 = server.PacketWriter
 // client's route is learned from its validated first packet and may be removed
 // explicitly when the session ends.
 type Router struct {
-	device  Device
-	mu      sync.RWMutex
-	writeMu sync.Mutex
-	routes  map[netip.Addr]SendIPv4
+	device      Device
+	mu          sync.RWMutex
+	writeMu     sync.Mutex
+	routes      map[netip.Addr]SendIPv4
+	ownedRoutes map[netip.Addr]func(*packetbuf.Buffer) error
 }
 
 func NewRouter(device Device) (*Router, error) {
 	if device == nil {
 		return nil, errors.New("tun: device is required")
 	}
-	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4)}, nil
+	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error)}, nil
 }
 
 func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 	r.mu.Lock()
 	r.routes[address] = send
+	delete(r.ownedRoutes, address)
+	r.mu.Unlock()
+}
+
+// BindOwned installs a writer consuming its buffer on every outcome. Device
+// I/O and routing remain unchanged; only return-packet storage is transferred.
+func (r *Router) BindOwned(address netip.Addr, send func(*packetbuf.Buffer) error) {
+	r.mu.Lock()
+	r.ownedRoutes[address] = send
 	r.mu.Unlock()
 }
 
@@ -72,8 +83,11 @@ func (r *Router) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		packet := append([]byte(nil), buffer[:n]...)
-		if err := r.dispatch(packet); err != nil {
+		packet, err := packetbuf.Copy(buffer[:n])
+		if err != nil {
+			return err
+		}
+		if err := r.dispatchOwned(packet); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -85,6 +99,23 @@ func (r *Router) Run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (r *Router) dispatchOwned(packet *packetbuf.Buffer) error {
+	_, destination, err := packetAddresses(packet.Bytes())
+	if err != nil {
+		packet.Release()
+		return err
+	}
+	r.mu.RLock()
+	send := r.ownedRoutes[destination]
+	r.mu.RUnlock()
+	if send != nil {
+		return send(packet)
+	}
+	// Legacy writers may retain the independently owned slice.
+	defer packet.Release()
+	return r.dispatch(append([]byte(nil), packet.Bytes()...))
 }
 
 func (r *Router) dispatch(packet []byte) error {
@@ -104,6 +135,7 @@ func (r *Router) dispatch(packet []byte) error {
 func (r *Router) Forget(address netip.Addr) {
 	r.mu.Lock()
 	delete(r.routes, address)
+	delete(r.ownedRoutes, address)
 	r.mu.Unlock()
 }
 

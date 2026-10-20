@@ -139,7 +139,7 @@ func main() {
 	var ipsec *ipsecRuntime
 	var ipsecDone <-chan error
 	if resolved.IPsec.Enabled {
-		ipsec, err = startIPsec(ctx, resolved, s)
+		ipsec, err = startIPsec(ctx, resolved, s, router)
 		if err != nil {
 			log.Fatal(err)
 		}

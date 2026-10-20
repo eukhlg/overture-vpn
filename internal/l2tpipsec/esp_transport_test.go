@@ -16,6 +16,11 @@ import (
 )
 
 func TestNATTServerProtectedL2TPHandshake(t *testing.T) {
+	testNATTServerProtectedL2TPHandshake(t, false)
+}
+
+func testNATTServerProtectedL2TPHandshake(t *testing.T, inPlace bool) {
+	t.Helper()
 	pair := testESPPair(isakmp.EncapsulationNATTTransport)
 	registry := ipsec.NewESPRegistry()
 	engine := server.NewEngine(server.Config{HostName: "server"})
@@ -23,6 +28,9 @@ func TestNATTServerProtectedL2TPHandshake(t *testing.T) {
 	listener, err := ipsec.ListenNATT("127.0.0.1:0", bridge.HandlePacket)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if inPlace {
+		listener.HandlePacketInPlace = bridge.HandlePacketInPlace
 	}
 	defer listener.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,4 +124,8 @@ func TestNATTServerDemuxesIKEAndKeepalive(t *testing.T) {
 	if kind != esp.NATTIKE || decodeErr != nil || packet.ResponderCookie == (isakmp.Cookie{}) {
 		t.Fatalf("kind=%d packet=%#v error=%v", kind, packet, decodeErr)
 	}
+}
+
+func TestNATTServerProtectedL2TPHandshakeInPlace(t *testing.T) {
+	testNATTServerProtectedL2TPHandshake(t, true)
 }
