@@ -60,7 +60,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	bridge.SetAuthenticatedActivityHandler(func(cookie isakmp.Cookie, now time.Time) {
 		control.NotePeerActivity(cookie, now)
 	})
-	bridge.Tracef = tracef
+	bridge.Tracef, bridge.Debugf = tracef, debugf
 	raw, err := ipsec.ListenRawESP(config.IPsec.ESPListen, bridge.HandlePacket)
 	if err != nil {
 		_ = ike.Close()

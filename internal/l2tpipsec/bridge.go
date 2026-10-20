@@ -37,6 +37,7 @@ type ESPBridge struct {
 	flows                 map[string]espFlow
 	authenticatedActivity func(isakmp.Cookie, time.Time)
 	Tracef                func(string, ...any)
+	Debugf                func(string, ...any)
 	HandleResult          func(context.Context, ESPBridgeResult) error
 }
 
@@ -80,10 +81,13 @@ func (b *ESPBridge) CloseIKE(cookie isakmp.Cookie) []server.SessionInfo {
 // Handle receives a bare ESP packet (raw protocol 50 or the UDP/4500 payload),
 // authenticates it, and feeds its UDP/1701 body to the existing L2TP engine.
 func (b *ESPBridge) Handle(peer net.Addr, wire []byte, now time.Time) (ESPBridgeResult, error) {
-	b.outboundMu.Lock()
-	defer b.outboundMu.Unlock()
 	session, udp, next, err := b.Registry.Open(peer, wire)
 	if err != nil {
+		if b.Debugf != nil && errors.Is(err, esp.ErrReplay) {
+			if state, ok := b.Registry.ReplayState(peer, wire); ok {
+				b.Debugf("esp replay reject peer=%s spi=%08x sequence=%d highest=%d window=%d reason=%s", peer, state.SPI, state.Sequence, state.Highest, state.Window, state.Reason)
+			}
+		}
 		return ESPBridgeResult{}, err
 	}
 	ikeCookie := b.Registry.Cookie(session)
@@ -119,6 +123,13 @@ func (b *ESPBridge) Handle(peer net.Addr, wire []byte, now time.Time) (ESPBridge
 	b.flows[logicalPeer.String()] = espFlow{session: session, peer: peer, logicalPeer: logicalPeer, clientPort: sourcePort}
 	b.mu.Unlock()
 	out := ESPBridgeResult{L2TP: result}
+	if len(result.Replies) == 0 {
+		return out, nil
+	}
+	// Only outbound sealing/enqueue needs ordering. Inbound data and TCP ACKs
+	// must keep flowing when a producer is blocked by sender backpressure.
+	b.outboundMu.Lock()
+	defer b.outboundMu.Unlock()
 	for _, reply := range result.Replies {
 		datagram, err := b.sealUDPReply(session, peer, sourcePort, reply)
 		if err != nil {
