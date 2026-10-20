@@ -96,7 +96,7 @@ jobs:
           L2TP_SHA: ${{ needs.plan.outputs.l2tp_sha }}
           IPSEC_SHA: ${{ needs.plan.outputs.ipsec_sha }}
         run: |
-          go get "github.com/eukhlg/l2tp-go@$L2TP_SHA" "github.com/eukhlg/ipsec-go@$IPSEC_SHA"
+          go get -t "github.com/eukhlg/l2tp-go/...@$L2TP_SHA" "github.com/eukhlg/ipsec-go/...@$IPSEC_SHA"
           echo "l2tp_go=$L2TP_SHA" >> "$GITHUB_ENV"
           echo "ipsec_go=$IPSEC_SHA" >> "$GITHUB_ENV"
 

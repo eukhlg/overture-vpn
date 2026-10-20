@@ -30,6 +30,6 @@ jobs:
         env:
           L2TP_SHA: ${{ steps.sources.outputs.l2tp_sha }}
           IPSEC_SHA: ${{ steps.sources.outputs.ipsec_sha }}
-        run: go get "github.com/eukhlg/l2tp-go@$L2TP_SHA" "github.com/eukhlg/ipsec-go@$IPSEC_SHA"
+        run: go get -t "github.com/eukhlg/l2tp-go/...@$L2TP_SHA" "github.com/eukhlg/ipsec-go/...@$IPSEC_SHA"
       - run: go test -race ./...
       - run: go vet ./...
