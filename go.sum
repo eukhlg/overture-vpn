@@ -1,5 +1,5 @@
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021140730-c55ad4624318 h1:qmOaMKvE+sFdYoJtQujL0yvh6FCPQF+5uwDBXjbNkKk=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021140730-c55ad4624318/go.mod h1:2S2jlUy8wCqJuwEnMuWBb7Tw5HHSblDOSeX+pu3tH6M=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261021142220-bc6e5c5e63bc h1:KlE7KF9bgDtNwTZvGbmJEgSHF3yrKDx1KqCY8R3GJwY=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261021142220-bc6e5c5e63bc/go.mod h1:2S2jlUy8wCqJuwEnMuWBb7Tw5HHSblDOSeX+pu3tH6M=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261021131321-64e8a9271471 h1:dxKLjWv31uA3+dguFnkhKOtQ6jKLunxgeyViNu3SWV4=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261021131321-64e8a9271471/go.mod h1:GQ3Sh9qv0ROdKdam/fEf161nS26ES+mtlOX49CAZ5CE=
 github.com/eukhlg/netio v0.0.0-20261021135112-192b7a1678cd h1:Cv7V+dxHl8faoM8VovbQVA9o3/U2AUPfH9fF/dzkl8Q=
