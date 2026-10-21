@@ -9,6 +9,8 @@ import (
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
+	"github.com/eukhlg/l2tp-go/protocol/l2tp"
+	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
 	"net"
 	"net/netip"
@@ -19,8 +21,11 @@ import (
 var ErrNotL2TP = errors.New("overture: transport payload is not UDP/1701")
 
 type ESPBridgeResult struct {
-	Datagrams []ipsec.ESPDatagram
-	L2TP      server.Result
+	association *ipsec.Association
+	logicalKey  netip.AddrPort
+	eligible    func() bool
+	Datagrams   []ipsec.ESPDatagram
+	L2TP        server.Result
 }
 type espFlow struct {
 	session     *ipsec.Association
@@ -30,6 +35,10 @@ type espFlow struct {
 }
 
 type ESPBridge struct {
+	// deliveryMu excludes protected control-plane teardown from callbacks. IPv4
+	// engine processing shares its read side, allowing crypto/PPP and TUN to overlap.
+	deliveryMu sync.RWMutex
+
 	// Sender is configured before serving. All ESP replies then share its FIFO.
 	Sender                *ESPSender
 	outboundMu            sync.Mutex
@@ -62,6 +71,8 @@ func (b *ESPBridge) SetAuthenticatedActivityHandler(handler func(isakmp.Cookie, 
 // their local tunnels. The caller remains responsible for removing the ESP SAs
 // from the registry.
 func (b *ESPBridge) CloseIKE(cookie isakmp.Cookie) []server.SessionInfo {
+	b.deliveryMu.Lock()
+	defer b.deliveryMu.Unlock()
 	b.mu.Lock()
 	peers := make(map[netip.AddrPort]net.Addr)
 	for key, flow := range b.flows {
@@ -116,11 +127,14 @@ func (b *ESPBridge) handle(peer net.Addr, wire []byte, now time.Time, borrowed b
 	if b.Tracef != nil {
 		b.Tracef("esp open peer=%s spi=%08x next_header=%d udp=%d->%d payload_bytes=%d encapsulation=%d", peer, session.InboundSPI(), next, sourcePort, destinationPort, len(payload), session.Encapsulation())
 	}
-	result, err := b.handleFlow(session, peer, sourcePort, payload, now, borrowed)
+	var eligible func() bool
+	result, err := b.handleFlow(session, peer, sourcePort, payload, now, borrowed, func(r server.Result) {
+		eligible = b.resultEligibility(r)
+	})
 	if err != nil {
 		return ESPBridgeResult{}, err
 	}
-	out := ESPBridgeResult{L2TP: result}
+	out := ESPBridgeResult{L2TP: result, association: session, logicalKey: netip.AddrPortFrom(flowKey(peer).Addr(), sourcePort), eligible: eligible}
 	if len(result.Replies) == 0 {
 		return out, nil
 	}
@@ -277,7 +291,7 @@ func (b *ESPBridge) HandlePacket(ctx context.Context, peer net.Addr, wire []byte
 	return b.handlePacket(ctx, peer, wire, now, false)
 }
 
-// HandlePacketInPlace borrows wire through synchronous Dispatch. Consumers
+// HandlePacketInPlace borrows wire until its eventual Dispatch returns. Consumers
 // retaining payload asynchronously must copy before returning from Dispatch.
 func (b *ESPBridge) HandlePacketInPlace(ctx context.Context, peer net.Addr, wire []byte, now time.Time) (ipsec.ESPPacketResult, error) {
 	return b.handlePacket(ctx, peer, wire, now, true)
@@ -287,11 +301,47 @@ func (b *ESPBridge) handlePacket(ctx context.Context, peer net.Addr, wire []byte
 	if err != nil {
 		return ipsec.ESPPacketResult{}, err
 	}
+	return b.packetResult(result), nil
+}
+
+func (b *ESPBridge) resultEligibility(result server.Result) func() bool {
+	var tunnelID, sessionID uint16
+	if result.Opened != nil {
+		tunnelID, sessionID = result.Opened.TunnelID, result.Opened.SessionID
+	}
+	if result.Data != nil {
+		tunnelID, sessionID = result.Data.TunnelID, result.Data.Session.LocalID
+	}
+	return b.Engine.SessionEligibility(tunnelID, sessionID)
+}
+
+func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 	out := ipsec.ESPPacketResult{Datagrams: result.Datagrams}
 	if b.HandleResult != nil {
-		out.Dispatch = func(ctx context.Context) error { return b.HandleResult(ctx, result) }
+		sessionEligible := result.eligible
+		if sessionEligible == nil {
+			sessionEligible = b.resultEligibility(result.L2TP)
+		}
+		out.Dispatch = func(ctx context.Context) error {
+			b.deliveryMu.RLock()
+			defer b.deliveryMu.RUnlock()
+			b.mu.RLock()
+			flow, exists := b.flows[result.logicalKey]
+			eligible := exists && flow.session == result.association && result.association.Active()
+			b.mu.RUnlock()
+			eligible = eligible && sessionEligible()
+			// Never hold b.mu while invoking callbacks: they may send, acquiring
+			// outboundMu and then b.mu. Never acquire outboundMu with b.mu held;
+			// recursive RLock can deadlock when a writer is waiting.
+			delivered := result
+			if !eligible {
+				delivered.L2TP.Opened = nil
+				delivered.L2TP.Data = nil
+			}
+			return b.HandleResult(ctx, delivered)
+		}
 	}
-	return out, nil
+	return out
 }
 
 func decodeUDP(wire []byte) (uint16, uint16, []byte, error) {
@@ -344,7 +394,28 @@ func sameESPPeer(a, b net.Addr) bool {
 	}
 }
 
-func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port uint16, payload []byte, now time.Time, borrowed bool) (server.Result, error) {
+func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port uint16, payload []byte, now time.Time, borrowed bool, capture ...func(server.Result)) (result server.Result, err error) {
+	// Only a pure IPv4 data frame cannot close or replace a PPP session.
+	// Serialize all control/negotiation with delivery, but leave data processing
+	// concurrent with router/TUN writes.
+	packet, decodeErr := l2tp.DecodePacketView(payload)
+	frame, frameErr := ppp.DecodeFrameView(packet.Payload)
+	if decodeErr != nil || packet.Control || frameErr != nil || frame.Protocol != ppp.ProtocolIPv4 {
+		b.deliveryMu.Lock()
+		defer b.deliveryMu.Unlock()
+	} else {
+		b.deliveryMu.RLock()
+		defer b.deliveryMu.RUnlock()
+	}
+	// Pin the engine identity before releasing the control/delivery gate and
+	// before synchronous replies can block. Teardown cannot replace it in between.
+	defer func() {
+		if err == nil {
+			for _, f := range capture {
+				f(result)
+			}
+		}
+	}()
 	key := netip.AddrPortFrom(flowKey(peer).Addr(), port)
 	handle := b.Engine.HandleDatagram
 	if borrowed {
@@ -354,7 +425,7 @@ func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port u
 	// tunnel and then have an already authenticated packet recreate it.
 	b.mu.RLock()
 	flow, ok := b.flows[key]
-	if ok && flow.session == session && flow.clientPort == port && sameESPPeer(flow.peer, peer) {
+	if ok && flow.session == session && flow.clientPort == port && sameESPPeer(flow.peer, peer) && decodeErr == nil && !packet.Control && frameErr == nil && frame.Protocol == ppp.ProtocolIPv4 {
 		defer b.mu.RUnlock()
 		if !session.Active() {
 			return server.Result{}, ipsec.ErrUnknownESP
@@ -373,7 +444,7 @@ func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port u
 	if !ok {
 		flow.logicalPeer = net.UDPAddrFromAddrPort(key)
 	}
-	result, err := handle(flow.logicalPeer, payload, now)
+	result, err = handle(flow.logicalPeer, payload, now)
 	if err != nil {
 		return server.Result{}, err
 	}
