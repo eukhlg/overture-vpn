@@ -252,3 +252,49 @@ func TestDelayedProtectedDeliveryEligibility(t *testing.T) {
 		})
 	}
 }
+
+func TestStalledCallbackDoesNotBlockCloseIKE(t *testing.T) {
+	engine, info := pipelineSession(t)
+	registry := ipsec.NewESPRegistry()
+	defer registry.Close()
+	peer := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4500}
+	pair := testESPPair(isakmp.EncapsulationNATTTransport)
+	pair.ResponderCookie = isakmp.Cookie{9}
+	if err := registry.Install(peer, pair); err != nil {
+		t.Fatal(err)
+	}
+	association := openTestAssociation(t, registry, peer, pair)
+	bridge, _ := NewESPBridge(engine, registry)
+	key := flowKey(info.Peer)
+	bridge.flows[key] = espFlow{session: association, peer: peer, logicalPeer: info.Peer, clientPort: 1701}
+	entered, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var bound bool
+	bridge.HandleResult = func(_ context.Context, r ESPBridgeResult) error {
+		close(entered)
+		<-resume
+		r.WithActive(func() { bound = true })
+		return nil
+	}
+	result := bridge.packetResult(ESPBridgeResult{association: association, logicalKey: key, L2TP: server.Result{Opened: &info}})
+	go func() { defer close(done); _ = result.Dispatch(context.Background()) }()
+	<-entered
+	closed := make(chan struct{})
+	go func() {
+		registry.RemoveIKE(pair.ResponderCookie)
+		bridge.CloseIKE(pair.ResponderCookie)
+		bridge.CloseIKE(isakmp.Cookie{10})
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		close(resume)
+		<-done
+		t.Fatal("lifecycle blocked by callback")
+	}
+	close(resume)
+	<-done
+	if bound || engine.TunnelCount() != 0 {
+		t.Fatalf("binding after close=%v tunnels=%d", bound, engine.TunnelCount())
+	}
+}

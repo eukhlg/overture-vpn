@@ -138,7 +138,7 @@ func main() {
 	}
 	s.SessionOpened = func(_ context.Context, info server.SessionInfo, send server.PacketWriter) error {
 		log.Printf("VPN client connected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
-		if router != nil {
+		if router != nil && info.Protocol == "l2tp" {
 			router.Bind(info.Address, send)
 			if info.Protocol == "l2tp" {
 				owned := s.OwnedWriter(info.TunnelID, info.SessionID)

@@ -132,6 +132,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	}
 	bridge.Sender = sender
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
+		callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
 			buffer, err := packetbuf.Copy(payload)
 			if err != nil {
@@ -151,12 +152,14 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		})
 		if err == nil && router != nil && result.L2TP.Opened != nil {
 			info := *result.L2TP.Opened
-			router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
-				err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
-				if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
-					return nil
-				}
-				return err
+			result.WithActive(func() {
+				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
+					err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+					if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+						return nil
+					}
+					return err
+				})
 			})
 		}
 		return err
