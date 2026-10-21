@@ -79,6 +79,8 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return nil, fmt.Errorf("listen NAT-T: %w", err)
 	}
 	raw.HandlePacketInPlace, natt.HandlePacketInPlace = bridge.HandlePacketInPlace, bridge.HandlePacketInPlace
+	raw.Registry, natt.Registry = registry, registry
+	raw.HandleDecrypted, natt.HandleDecrypted = bridge.HandleDecryptedPacket, bridge.HandleDecryptedPacket
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {

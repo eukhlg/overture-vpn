@@ -112,6 +112,10 @@ func (b *ESPBridge) handle(peer net.Addr, wire []byte, now time.Time, borrowed b
 		}
 		return ESPBridgeResult{}, err
 	}
+	return b.handleDecrypted(session, peer, udp, next, now, borrowed)
+}
+
+func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, udp []byte, next uint8, now time.Time, borrowed bool) (ESPBridgeResult, error) {
 	ikeCookie := b.Registry.Cookie(session)
 	b.mu.RLock()
 	authenticatedActivity := b.authenticatedActivity
@@ -300,6 +304,16 @@ func (b *ESPBridge) HandlePacketInPlace(ctx context.Context, peer net.Addr, wire
 }
 func (b *ESPBridge) handlePacket(ctx context.Context, peer net.Addr, wire []byte, now time.Time, borrowed bool) (ipsec.ESPPacketResult, error) {
 	result, err := b.handle(peer, wire, now, borrowed)
+	if err != nil {
+		return ipsec.ESPPacketResult{}, err
+	}
+	return b.packetResult(result), nil
+}
+
+// HandleDecryptedPacket receives registry-authenticated plaintext. The caller
+// owns its storage through Dispatch; flow, PPP and reply handling stay here.
+func (b *ESPBridge) HandleDecryptedPacket(ctx context.Context, session *ipsec.Association, peer net.Addr, payload []byte, next uint8, now time.Time) (ipsec.ESPPacketResult, error) {
+	result, err := b.handleDecrypted(session, peer, payload, next, now, true)
 	if err != nil {
 		return ipsec.ESPPacketResult{}, err
 	}
