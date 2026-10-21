@@ -32,6 +32,8 @@ enabled = true
 interface = ""
 
 [ipsec]
+# 0 or 1 uses serial crypto; higher values preserve ordered replay commit.
+receive_workers = 4
 # Experimental IKEv1 + raw ESP and NAT-T transport. Requires CAP_NET_RAW.
 enabled = true
 ike_listen = ":500"

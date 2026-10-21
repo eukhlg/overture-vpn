@@ -80,6 +80,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	}
 	raw.HandlePacketInPlace, natt.HandlePacketInPlace = bridge.HandlePacketInPlace, bridge.HandlePacketInPlace
 	raw.Registry, natt.Registry = registry, registry
+	raw.ReceiveWorkers, natt.ReceiveWorkers = config.IPsec.ReceiveWorkers, config.IPsec.ReceiveWorkers
 	raw.HandleDecrypted, natt.HandleDecrypted = bridge.HandleDecryptedPacket, bridge.HandleDecryptedPacket
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
