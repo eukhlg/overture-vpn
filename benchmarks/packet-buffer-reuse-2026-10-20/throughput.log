@@ -1,0 +1,30 @@
+SETUP before-aes128-esp
+before-aes128-esp upload 0 523.01
+before-aes128-esp upload 1 521.26
+before-aes128-esp download 0 768.82
+before-aes128-esp download 1 773.11
+SETUP after-aes128-esp
+after-aes128-esp upload 0 606.71
+after-aes128-esp upload 1 600.32
+after-aes128-esp download 0 754.52
+after-aes128-esp download 1 758.11
+SETUP reference-aes128-esp
+reference-aes128-esp upload 0 1505.74
+reference-aes128-esp upload 1 1510.09
+reference-aes128-esp download 0 1500.61
+reference-aes128-esp download 1 1525.57
+SETUP before-aes128-natt
+before-aes128-natt upload 0 555.6
+before-aes128-natt upload 1 558.69
+before-aes128-natt download 0 772.91
+before-aes128-natt download 1 777.03
+SETUP after-aes128-natt
+after-aes128-natt upload 0 662.1
+after-aes128-natt upload 1 660.29
+after-aes128-natt download 0 727.5
+after-aes128-natt download 1 732.0
+SETUP reference-aes128-natt
+reference-aes128-natt upload 0 1499.77
+reference-aes128-natt upload 1 1494.64
+reference-aes128-natt download 0 1493.36
+reference-aes128-natt download 1 1495.9

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
@@ -81,7 +82,14 @@ func (b *ESPBridge) CloseIKE(cookie isakmp.Cookie) []server.SessionInfo {
 // Handle receives a bare ESP packet (raw protocol 50 or the UDP/4500 payload),
 // authenticates it, and feeds its UDP/1701 body to the existing L2TP engine.
 func (b *ESPBridge) Handle(peer net.Addr, wire []byte, now time.Time) (ESPBridgeResult, error) {
-	session, udp, next, err := b.Registry.Open(peer, wire)
+	return b.handle(peer, wire, now, false)
+}
+func (b *ESPBridge) handle(peer net.Addr, wire []byte, now time.Time, borrowed bool) (ESPBridgeResult, error) {
+	open := b.Registry.Open
+	if borrowed {
+		open = b.Registry.OpenInPlace
+	}
+	session, udp, next, err := open(peer, wire)
 	if err != nil {
 		if b.Debugf != nil && errors.Is(err, esp.ErrReplay) {
 			if state, ok := b.Registry.ReplayState(peer, wire); ok {
@@ -115,7 +123,11 @@ func (b *ESPBridge) Handle(peer net.Addr, wire []byte, now time.Time) (ESPBridge
 		b.mu.Unlock()
 		return ESPBridgeResult{}, ipsec.ErrUnknownESP
 	}
-	result, err := b.Engine.HandleDatagram(logicalPeer, payload, now)
+	handle := b.Engine.HandleDatagram
+	if borrowed {
+		handle = b.Engine.HandleDatagramBorrowed
+	}
+	result, err := handle(logicalPeer, payload, now)
 	if err != nil {
 		b.mu.Unlock()
 		return ESPBridgeResult{}, err
@@ -152,16 +164,76 @@ func (b *ESPBridge) Handle(peer net.Addr, wire []byte, now time.Time) (ESPBridge
 // SendL2TP seals on the calling goroutine, then queues owned ciphertext. The
 // lock spans sequence allocation through enqueue, including control replies.
 func (b *ESPBridge) SendL2TP(peer net.Addr, payload []byte) error {
-	b.outboundMu.Lock()
-	defer b.outboundMu.Unlock()
-	if b.Sender == nil {
-		return errors.New("esp bridge: sender is not configured")
-	}
-	session, datagram, err := b.sealL2TP(peer, payload)
+	buffer, err := packetbuf.Copy(payload)
 	if err != nil {
 		return err
 	}
-	return b.Sender.Enqueue(session, datagram)
+	return b.sendL2TPBuffer(peer, buffer)
+}
+
+// SendIPv4Buffer consumes buffer on every outcome. It frames the original TUN
+// copy in place, seals on the producer and transfers ownership to the sender.
+func (b *ESPBridge) SendIPv4Buffer(tunnelID, sessionID uint16, buffer *packetbuf.Buffer) error {
+	peer, err := b.Engine.PrependIPv4(tunnelID, sessionID, buffer)
+	if err != nil {
+		buffer.Release()
+		return err
+	}
+	return b.sendL2TPBuffer(peer, buffer)
+}
+
+func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) error {
+	b.outboundMu.Lock()
+	defer b.outboundMu.Unlock()
+	if b.Sender == nil {
+		buffer.Release()
+		return errors.New("esp bridge: sender is not configured")
+	}
+	b.mu.Lock()
+	flow, ok := b.flows[peer.String()]
+	if !ok {
+		b.mu.Unlock()
+		buffer.Release()
+		return ipsec.ErrESPPeer
+	}
+	seal := func() (ipsec.ESPDatagram, error) {
+		if buffer.Len() > 65535-8 {
+			return ipsec.ESPDatagram{}, packetbuf.ErrSize
+		}
+		header, err := buffer.Prepend(8)
+		if err != nil {
+			return ipsec.ESPDatagram{}, err
+		}
+		binary.BigEndian.PutUint16(header[:2], 1701)
+		binary.BigEndian.PutUint16(header[2:4], flow.clientPort)
+		binary.BigEndian.PutUint16(header[4:6], uint16(buffer.Len()))
+		clear(header[6:8])
+		datagram, err := b.Registry.SealBuffer(flow.session, flow.peer, buffer, esp.IPProtocolUDP)
+		if err != nil {
+			_ = buffer.TrimFront(8)
+		}
+		return datagram, err
+	}
+	datagram, err := seal()
+	if errors.Is(err, esp.ErrSALifetime) {
+		b.Registry.Remove(flow.session.InboundSPI())
+	}
+	if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, esp.ErrSALifetime) {
+		if replacement := b.Registry.Replacement(flow.session); replacement != nil {
+			flow.session, flow.peer = replacement, replacement.Peer()
+			b.flows[peer.String()] = flow
+			datagram, err = seal()
+		}
+	}
+	b.mu.Unlock()
+	if err != nil {
+		buffer.Release()
+		return err
+	}
+	if err = b.Sender.Enqueue(flow.session, datagram); err != nil {
+		datagram.Release()
+	}
+	return err
 }
 
 // SealL2TP returns an owned ciphertext packet for synchronous embedders.
@@ -202,7 +274,16 @@ func (b *ESPBridge) sealUDPReply(session *ipsec.Association, peer net.Addr, clie
 
 // HandlePacket adapts authenticated IPsec traffic to L2TP and publishes session events.
 func (b *ESPBridge) HandlePacket(ctx context.Context, peer net.Addr, wire []byte, now time.Time) (ipsec.ESPPacketResult, error) {
-	result, err := b.Handle(peer, wire, now)
+	return b.handlePacket(ctx, peer, wire, now, false)
+}
+
+// HandlePacketInPlace borrows wire through synchronous Dispatch. Consumers
+// retaining payload asynchronously must copy before returning from Dispatch.
+func (b *ESPBridge) HandlePacketInPlace(ctx context.Context, peer net.Addr, wire []byte, now time.Time) (ipsec.ESPPacketResult, error) {
+	return b.handlePacket(ctx, peer, wire, now, true)
+}
+func (b *ESPBridge) handlePacket(ctx context.Context, peer net.Addr, wire []byte, now time.Time, borrowed bool) (ipsec.ESPPacketResult, error) {
+	result, err := b.handle(peer, wire, now, borrowed)
 	if err != nil {
 		return ipsec.ESPPacketResult{}, err
 	}
@@ -221,7 +302,7 @@ func decodeUDP(wire []byte) (uint16, uint16, []byte, error) {
 	if length < 8 || length > len(wire) {
 		return 0, 0, nil, ErrNotL2TP
 	}
-	return binary.BigEndian.Uint16(wire[:2]), binary.BigEndian.Uint16(wire[2:4]), append([]byte(nil), wire[8:length]...), nil
+	return binary.BigEndian.Uint16(wire[:2]), binary.BigEndian.Uint16(wire[2:4]), wire[8:length:length], nil
 }
 func encodeUDP(source, destination uint16, payload []byte) []byte {
 	wire := make([]byte, 8+len(payload))

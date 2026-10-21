@@ -10,11 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
+	"github.com/eukhlg/overture-vpn/tun"
 )
 
 type ipsecRuntime struct {
@@ -29,7 +31,7 @@ type ipsecRuntime struct {
 	closeOnce sync.Once
 }
 
-func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server) (*ipsecRuntime, error) {
+func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server, router *tun.Router) (*ipsecRuntime, error) {
 	identityIP := net.ParseIP(config.IPsec.ServerID).To4()
 	identity, _ := netip.ParseAddr(config.IPsec.ServerID)
 	ikeLifetime, _ := time.ParseDuration(config.IPsec.IKELifetime)
@@ -76,6 +78,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, fmt.Errorf("listen NAT-T: %w", err)
 	}
+	raw.HandlePacketInPlace, natt.HandlePacketInPlace = bridge.HandlePacketInPlace, bridge.HandlePacketInPlace
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
@@ -129,8 +132,12 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	}
 	bridge.Sender = sender
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
-		return l2tpServer.Dispatch(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, _, _ uint16, payload []byte) error {
-			err := bridge.SendL2TP(peer, payload)
+		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
+			buffer, err := packetbuf.Copy(payload)
+			if err != nil {
+				return err
+			}
+			err = bridge.SendIPv4Buffer(tunnelID, sessionID, buffer)
 			if err != nil {
 				if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
 					if debugf != nil {
@@ -142,6 +149,17 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			}
 			return nil
 		})
+		if err == nil && router != nil && result.L2TP.Opened != nil {
+			info := *result.L2TP.Opened
+			router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
+				err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+				if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+					return nil
+				}
+				return err
+			})
+		}
+		return err
 	}
 	bridge.HandleResult = handleResult
 	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, cancel: cancel}

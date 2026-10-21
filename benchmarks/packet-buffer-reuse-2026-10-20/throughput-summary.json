@@ -1,0 +1,128 @@
+[
+  {
+    "case": "after-aes128-esp",
+    "upload": {
+      "trials_mbps": [
+        606.7076695546419,
+        600.3210275518047
+      ],
+      "mean_mbps": 603.5143485532233
+    },
+    "download": {
+      "trials_mbps": [
+        754.5165828992972,
+        758.106055517467
+      ],
+      "mean_mbps": 756.3113192083821
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  },
+  {
+    "case": "after-aes128-natt",
+    "upload": {
+      "trials_mbps": [
+        662.1026478676754,
+        660.2878488881023
+      ],
+      "mean_mbps": 661.1952483778889
+    },
+    "download": {
+      "trials_mbps": [
+        727.5017377993049,
+        731.9998171765803
+      ],
+      "mean_mbps": 729.7507774879426
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  },
+  {
+    "case": "before-aes128-esp",
+    "upload": {
+      "trials_mbps": [
+        523.006429824693,
+        521.2620173758011
+      ],
+      "mean_mbps": 522.134223600247
+    },
+    "download": {
+      "trials_mbps": [
+        768.8185371830265,
+        773.1123789066738
+      ],
+      "mean_mbps": 770.9654580448502
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  },
+  {
+    "case": "before-aes128-natt",
+    "upload": {
+      "trials_mbps": [
+        555.6014747366211,
+        558.691907946251
+      ],
+      "mean_mbps": 557.146691341436
+    },
+    "download": {
+      "trials_mbps": [
+        772.9083839426972,
+        777.033123733
+      ],
+      "mean_mbps": 774.9707538378486
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  },
+  {
+    "case": "reference-aes128-esp",
+    "upload": {
+      "trials_mbps": [
+        1505.7374848397892,
+        1510.0906598307154
+      ],
+      "mean_mbps": 1507.9140723352523
+    },
+    "download": {
+      "trials_mbps": [
+        1500.6132120056488,
+        1525.57245961377
+      ],
+      "mean_mbps": 1513.0928358097094
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  },
+  {
+    "case": "reference-aes128-natt",
+    "upload": {
+      "trials_mbps": [
+        1499.7665546208739,
+        1494.642704974709
+      ],
+      "mean_mbps": 1497.2046297977913
+    },
+    "download": {
+      "trials_mbps": [
+        1493.3587747767938,
+        1495.9012142221857
+      ],
+      "mean_mbps": 1494.6299944994898
+    },
+    "replay_rejections": {
+      "overture-buffer-bench-client-xfrm.txt": "0",
+      "overture-buffer-bench-server-xfrm.txt": "0"
+    }
+  }
+]

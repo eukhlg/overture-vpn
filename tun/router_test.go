@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/server"
 )
 
@@ -126,4 +127,46 @@ func ipv4Packet(source, destination [4]byte) []byte {
 	copy(packet[12:16], source[:])
 	copy(packet[16:20], destination[:])
 	return packet
+}
+
+func TestOwnedReturnRouteTransfersStorage(t *testing.T) {
+	router, _ := NewRouter(newMemoryDevice())
+	address := netip.MustParseAddr("10.0.0.2")
+	packet := ipv4Packet([4]byte{8, 8, 8, 8}, [4]byte{10, 0, 0, 2})
+	owned, _ := packetbuf.Copy(packet)
+	view := owned.Bytes()
+	called := false
+	router.BindOwned(address, func(b *packetbuf.Buffer) error {
+		called = true
+		if &b.Bytes()[0] != &view[0] {
+			t.Fatal("return packet copied")
+		}
+		b.Release()
+		return nil
+	})
+	if err := router.dispatchOwned(owned); err != nil || !called {
+		t.Fatalf("called=%t err=%v", called, err)
+	}
+	if !bytes.Equal(view, make([]byte, len(view))) {
+		t.Fatal("consumer failed to release")
+	}
+	// Existing writers retain independent slices after the pooled buffer is freed.
+	var retained []byte
+	router.Bind(address, func(p []byte) error { retained = p; return nil })
+	owned, _ = packetbuf.Copy(packet)
+	if err := router.dispatchOwned(owned); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(retained, packet) {
+		t.Fatal("legacy writer storage was recycled")
+	}
+	router.Forget(address)
+	owned, _ = packetbuf.Copy(packet)
+	view = owned.Bytes()
+	if err := router.dispatchOwned(owned); err != ErrNoRoute {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(view, make([]byte, len(view))) {
+		t.Fatal("no-route packet leaked")
+	}
 }

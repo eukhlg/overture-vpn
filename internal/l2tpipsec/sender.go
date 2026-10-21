@@ -66,13 +66,15 @@ func (s *ESPSender) terminalError() error {
 	return s.ctx.Err()
 }
 
+// Enqueue transfers datagram ownership only on success. On error the producer
+// must release pooled storage; accepted datagrams are released by the sender.
 func (s *ESPSender) Enqueue(association *ipsec.Association, datagram ipsec.ESPDatagram) error {
 	s.submitMu.Lock()
 	defer s.submitMu.Unlock()
 	if err := s.terminalError(); err != nil {
 		return err
 	}
-	if !association.Active() {
+	if association == nil || !association.Active() {
 		return ipsec.ErrUnknownESP
 	}
 	select {
@@ -96,7 +98,8 @@ func (s *ESPSender) run() {
 		// After cancellation, no producer can retain a reference in the queue.
 		s.submitMu.Lock()
 		for len(s.queue) > 0 {
-			<-s.queue
+			packet := <-s.queue
+			packet.datagram.Release()
 		}
 		s.submitMu.Unlock()
 		s.done <- failure
@@ -108,9 +111,11 @@ func (s *ESPSender) run() {
 			return
 		case packet := <-s.queue:
 			if s.ctx.Err() != nil {
+				packet.datagram.Release()
 				return
 			}
 			if !packet.association.Active() {
+				packet.datagram.Release()
 				continue
 			}
 			datagram := packet.datagram
@@ -121,6 +126,7 @@ func (s *ESPSender) run() {
 				peer = &net.IPAddr{IP: udp.IP, Zone: udp.Zone}
 			}
 			n, err := conn.WriteTo(datagram.Payload, peer)
+			datagram.Release()
 			if err == nil && n != len(datagram.Payload) {
 				err = io.ErrShortWrite
 			}
