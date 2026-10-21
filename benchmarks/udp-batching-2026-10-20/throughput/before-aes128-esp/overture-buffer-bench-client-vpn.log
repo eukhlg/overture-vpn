@@ -1,0 +1,42 @@
+xl2tpd[88]: Not looking for kernel SAref support.
+xl2tpd[88]: Using l2tp kernel support.
+xl2tpd[88]: xl2tpd version xl2tpd-1.3.18 started on 7c0e2c3930e3 PID:88
+xl2tpd[88]: Written by Mark Spencer, Copyright (C) 1998, Adtran, Inc.
+xl2tpd[88]: Forked by Scott Balmos and David Stipp, (C) 2001
+xl2tpd[88]: Inherited by Jeff McAdams, (C) 2002
+xl2tpd[88]: Forked again by Xelerance (www.xelerance.com) (C) 2006-2016
+xl2tpd[88]: Listening on IP address 0.0.0.0, port 1701
+xl2tpd[88]: Connecting to host 172.29.231.2, port 1701
+xl2tpd[88]: Connection established to 172.29.231.2, 1701.  Local: 1543, Remote: 1 (ref=0/0).
+xl2tpd[88]: Calling on tunnel 1543
+xl2tpd[88]: Call established with 172.29.231.2, Local: 29851, Remote: 1, Serial: 1 (ref=0/0)
+Warning: couldn't open ppp database /run/ppp/pppd2.tdb
+using channel 1
+Using interface ppp0
+Connect: ppp0 <--> 
+Overriding mtu 1500 to 1400
+PPPoL2TP options: debugmask 0
+Overriding mru 1500 to mtu value 1400
+sent [LCP ConfReq id=0x1 <mru 1400> <magic 0xadfaae1d>]
+rcvd [LCP ConfAck id=0x1 <mru 1400> <magic 0xadfaae1d>]
+rcvd [LCP ConfReq id=0x1 <mru 1500> <auth pap>]
+sent [LCP ConfAck id=0x1 <mru 1500> <auth pap>]
+Overriding mtu 1500 to 1400
+PPPoL2TP options: debugmask 0
+sent [PAP AuthReq id=0x1 user="bench" password=<hidden>]
+rcvd [PAP AuthAck id=0x1 "welcome"]
+Remote message: welcome
+PAP authentication succeeded
+sent [IPCP ConfReq id=0x1 <addr 172.29.231.3>]
+sent [IPV6CP ConfReq id=0x1 <addr fe80::809c:c939:d866:b63f>]
+rcvd [IPCP ConfReq id=0x1 <addr 10.77.0.1>]
+sent [IPCP ConfAck id=0x1 <addr 10.77.0.1>]
+rcvd [LCP ProtRej id=0x2 80 57 01 01 00 0e 01 0a 80 9c c9 39 d8 66 b6 3f]
+Protocol-Reject for 'IPv6 Control Protocol' (0x8057) received
+rcvd [IPCP ConfNak id=0x1 <addr 10.77.0.2>]
+sent [IPCP ConfReq id=0x2 <addr 10.77.0.2>]
+rcvd [IPCP ConfAck id=0x2 <addr 10.77.0.2>]
+local  IP address 10.77.0.2
+remote IP address 10.77.0.1
+Script /etc/ppp/ip-up started (pid 95)
+Script /etc/ppp/ip-up finished (pid 95), status = 0x0

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	ipsec "github.com/eukhlg/ipsec-go/server"
+	"github.com/eukhlg/ipsec-go/udptransport"
 )
 
 // SenderQueueCapacity bounds ciphertext retained between encryption and writes.
@@ -37,7 +38,15 @@ type ESPSender struct {
 	closeOnce      sync.Once
 }
 
+type datagramWriter interface {
+	Write([]udptransport.Message) (int, error)
+}
+
 func NewESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int) (*ESPSender, error) {
+	return newESPSender(ctx, raw, natt, capacity, udptransport.New(natt))
+}
+
+func newESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, udp datagramWriter) (*ESPSender, error) {
 	if raw == nil || natt == nil || capacity < 1 {
 		return nil, errors.New("esp sender: sockets and positive capacity required")
 	}
@@ -49,7 +58,7 @@ func NewESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int) (
 		_ = raw.Close()
 		_ = natt.Close()
 	}()
-	go s.run()
+	go s.run(udp)
 	return s, nil
 }
 
@@ -85,7 +94,7 @@ func (s *ESPSender) Enqueue(association *ipsec.Association, datagram ipsec.ESPDa
 	}
 }
 
-func (s *ESPSender) run() {
+func (s *ESPSender) run(udp datagramWriter) {
 	var failure error
 	defer func() {
 		if failure != nil {
@@ -105,39 +114,103 @@ func (s *ESPSender) run() {
 		s.done <- failure
 		close(s.stopped)
 	}()
+	var packets [udptransport.BatchSize]encryptedPacket
+	var messages [udptransport.BatchSize]udptransport.Message
+	var indices [udptransport.BatchSize]int
 	for {
+		var count int
 		select {
 		case <-s.ctx.Done():
 			return
-		case packet := <-s.queue:
-			if s.ctx.Err() != nil {
-				packet.datagram.Release()
-				return
-			}
-			if !packet.association.Active() {
-				packet.datagram.Release()
-				continue
-			}
-			datagram := packet.datagram
-			conn, peer := s.raw, datagram.Peer
-			if datagram.NATT {
-				conn = s.natt
-			} else if udp, ok := peer.(*net.UDPAddr); ok {
-				peer = &net.IPAddr{IP: udp.IP, Zone: udp.Zone}
-			}
-			n, err := conn.WriteTo(datagram.Payload, peer)
-			datagram.Release()
-			if err == nil && n != len(datagram.Payload) {
-				err = io.ErrShortWrite
-			}
-			if err != nil {
-				if s.ctx.Err() == nil {
-					failure = fmt.Errorf("esp sender write: %w", err)
-				}
-				return
+		case packets[0] = <-s.queue:
+			count = 1
+		}
+	drain:
+		for count < len(packets) {
+			select {
+			case packets[count] = <-s.queue:
+				count++
+			default:
+				break drain
 			}
 		}
+		// The local batch owns these buffers even if cancellation or a write fails.
+		err := func() error {
+			defer func() {
+				for i := 0; i < count; i++ {
+					packets[i].datagram.Release()
+					packets[i] = encryptedPacket{}
+					messages[i] = udptransport.Message{}
+				}
+			}()
+			for start := 0; start < count; {
+				if s.ctx.Err() != nil {
+					return s.ctx.Err()
+				}
+				if !packets[start].association.Active() {
+					start++
+					continue
+				}
+				if !packets[start].datagram.NATT {
+					d := packets[start].datagram
+					peer := d.Peer
+					if addr, ok := peer.(*net.UDPAddr); ok {
+						peer = &net.IPAddr{IP: addr.IP, Zone: addr.Zone}
+					}
+					n, err := s.raw.WriteTo(d.Payload, peer)
+					if err != nil {
+						return err
+					}
+					if n != len(d.Payload) {
+						return io.ErrShortWrite
+					}
+					start++
+					continue
+				}
+				// Group only adjacent UDP messages, preserving queue order across transports.
+				end := start
+				for end < count && packets[end].datagram.NATT {
+					end++
+				}
+				for start < end {
+					if s.ctx.Err() != nil {
+						return s.ctx.Err()
+					}
+					// Recheck every unsent SA on each attempt, including after partial writes.
+					nmsg := 0
+					for i := start; i < end; i++ {
+						if !packets[i].association.Active() {
+							continue
+						}
+						d := packets[i].datagram
+						messages[nmsg] = udptransport.Message{Payload: d.Payload, Peer: d.Peer}
+						indices[nmsg] = i
+						nmsg++
+					}
+					if nmsg == 0 {
+						break
+					}
+					n, err := udp.Write(messages[:nmsg])
+					if err != nil {
+						return err
+					}
+					if n == 0 {
+						return io.ErrNoProgress
+					}
+					start = indices[n-1] + 1
+				}
+				start = end
+			}
+			return nil
+		}()
+		if err != nil {
+			if s.ctx.Err() == nil {
+				failure = fmt.Errorf("esp sender write: %w", err)
+			}
+			return
+		}
 	}
+
 }
 
 // Close discards the backlog, interrupts an active write, and joins both workers.

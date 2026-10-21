@@ -1,0 +1,25 @@
+=== RUN   TestLoopbackMessages
+=== RUN   TestLoopbackMessages/1
+=== RUN   TestLoopbackMessages/8
+=== RUN   TestLoopbackMessages/32
+--- PASS: TestLoopbackMessages (0.00s)
+    --- PASS: TestLoopbackMessages/1 (0.00s)
+    --- PASS: TestLoopbackMessages/8 (0.00s)
+    --- PASS: TestLoopbackMessages/32 (0.00s)
+=== RUN   TestTruncationAndClosure
+--- PASS: TestTruncationAndClosure (0.00s)
+=== RUN   TestPartialProgressAndZero
+--- PASS: TestPartialProgressAndZero (0.00s)
+=== RUN   TestReadValidPrefixAndLengths
+--- PASS: TestReadValidPrefixAndLengths (0.00s)
+=== RUN   TestUnsupportedBatchFallsBackOnce
+--- PASS: TestUnsupportedBatchFallsBackOnce (0.00s)
+=== RUN   TestIPv6AndDualStack
+=== RUN   TestIPv6AndDualStack/udp6
+=== RUN   TestIPv6AndDualStack/udp
+--- PASS: TestIPv6AndDualStack (0.00s)
+    --- PASS: TestIPv6AndDualStack/udp6 (0.00s)
+    --- PASS: TestIPv6AndDualStack/udp (0.00s)
+=== RUN   TestDeadlineAndNegativeErrorCount
+--- PASS: TestDeadlineAndNegativeErrorCount (0.01s)
+PASS

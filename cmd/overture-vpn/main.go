@@ -12,8 +12,11 @@ import (
 	"strings"
 	"syscall"
 
+	"errors"
+	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )
 
@@ -92,6 +95,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	plain, err := plainl2tp.New(s.Conn)
+	if err != nil {
+		s.Close()
+		log.Fatal(err)
+	}
+	s.Conn = plain
+	s.BorrowedReceive = true
 	defer s.Close()
 	var router *tun.Router
 	var cleanup func(context.Context) error
@@ -122,6 +132,16 @@ func main() {
 		log.Printf("VPN client connected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
 		if router != nil {
 			router.Bind(info.Address, send)
+			if info.Protocol == "l2tp" {
+				owned := s.OwnedWriter(info.TunnelID, info.SessionID)
+				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
+					err := owned(buffer)
+					if errors.Is(err, server.ErrUnknownTunnel) || errors.Is(err, server.ErrSessionNotEstablished) {
+						return nil
+					}
+					return err
+				})
+			}
 		}
 		return nil
 	}

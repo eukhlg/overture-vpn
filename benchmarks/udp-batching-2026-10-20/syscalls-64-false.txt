@@ -1,0 +1,11 @@
+strace: Process 55 attached
+strace: Process 56 attached
+strace: Process 57 attached
+strace: Process 58 attached
+strace: Process 59 attached
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 54.61    0.350991           3    100001           sendto
+ 45.39    0.291719          14     19828        40 recvfrom
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.642710           5    119829        40 total

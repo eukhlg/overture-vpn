@@ -1,0 +1,33 @@
+SETUP before-aes128-esp
+before-aes128-esp upload 0 625.07
+before-aes128-esp upload 1 619.86
+before-aes128-esp download 0 766.19
+before-aes128-esp download 1 733.37
+SETUP after-aes128-esp
+Traceback (most recent call last):
+  File "/tmp/overture-udp-bench/run-throughput.py", line 26, in <module>
+    m.setup(kind,'aes128',natt)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/overture-udp-bench/interop-harness.py", line 82, in setup
+    negotiation=ex(C,'ipsec up bench',check=False)
+  File "/tmp/overture-udp-bench/run-throughput.py", line 16, in ex
+    return original_ex(c,command,check=check)
+  File "/private/tmp/overture-udp-bench/interop-harness.py", line 11, in ex
+    def ex(c,s,check=True): return run('docker','exec',c,'sh','-c',s,check=check)
+                                   ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/overture-udp-bench/interop-harness.py", line 8, in run
+    r=sp.run(a,text=True,stdout=sp.PIPE,stderr=sp.STDOUT,timeout=90)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 557, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1221, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2154, in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1268, in _check_timeout
+    raise TimeoutExpired(
+    ...<2 lines>...
+            stderr=b''.join(stderr_seq) if stderr_seq else None)
+subprocess.TimeoutExpired: Command '('docker', 'exec', 'overture-buffer-bench-client', 'sh', '-c', 'ipsec up bench')' timed out after 90 seconds

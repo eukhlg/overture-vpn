@@ -1,0 +1,5 @@
+goos: linux
+goarch: arm64
+pkg: github.com/eukhlg/ipsec-go/udptransport
+BenchmarkUDPTransport/bytes=64/batch=false-10         	  100000	     11177 ns/op	   5.73 MB/s	      31 B/op	       0 allocs/op
+PASS
