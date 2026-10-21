@@ -100,7 +100,7 @@ func TestESPBridgeMovesFlowToReplacementSAAfterDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldSession := openTestAssociation(t, registry, peer, first)
-	bridge.flows[logicalPeer.String()] = espFlow{session: oldSession, peer: peer, logicalPeer: logicalPeer, clientPort: 40000}
+	bridge.flows[flowKey(logicalPeer)] = espFlow{session: oldSession, peer: peer, logicalPeer: logicalPeer, clientPort: 40000}
 	if err := registry.Install(peer, second); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestESPBridgeCloseIKERemovesOwnedFlowsAndTunnels(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := openTestAssociation(t, registry, peer, pair)
-	bridge.flows[logicalPeer.String()] = espFlow{session: session, peer: peer, logicalPeer: logicalPeer, clientPort: 40000}
+	bridge.flows[flowKey(logicalPeer)] = espFlow{session: session, peer: peer, logicalPeer: logicalPeer, clientPort: 40000}
 
 	if closed := bridge.CloseIKE(isakmp.Cookie{8}); len(closed) != 0 || engine.TunnelCount() != 1 || len(bridge.flows) != 1 {
 		t.Fatalf("unrelated close: closed=%#v tunnels=%d flows=%d", closed, engine.TunnelCount(), len(bridge.flows))
