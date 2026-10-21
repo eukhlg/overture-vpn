@@ -2,6 +2,7 @@ package l2tpipsec
 
 import (
 	"context"
+	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
@@ -268,6 +269,8 @@ func TestStalledCallbackDoesNotBlockCloseIKE(t *testing.T) {
 	key := flowKey(info.Peer)
 	bridge.flows[key] = espFlow{session: association, peer: peer, logicalPeer: info.Peer, clientPort: 1701}
 	entered, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	control := expiredPipelineControl(t, testPeer("192.0.2.2:500"))
+	var maintained bool
 	var bound bool
 	bridge.HandleResult = func(_ context.Context, r ESPBridgeResult) error {
 		close(entered)
@@ -280,6 +283,11 @@ func TestStalledCallbackDoesNotBlockCloseIKE(t *testing.T) {
 	<-entered
 	closed := make(chan struct{})
 	go func() {
+		for _, event := range control.Maintain(time.Now()) {
+			if event.Type == isakmp.LifecycleExpireIKE {
+				maintained = true
+			}
+		}
 		registry.RemoveIKE(pair.ResponderCookie)
 		bridge.CloseIKE(pair.ResponderCookie)
 		bridge.CloseIKE(isakmp.Cookie{10})
@@ -294,7 +302,88 @@ func TestStalledCallbackDoesNotBlockCloseIKE(t *testing.T) {
 	}
 	close(resume)
 	<-done
+	if !maintained || control.SACount() != 0 {
+		t.Fatal("other peer maintenance/expiry stalled")
+	}
 	if bound || engine.TunnelCount() != 0 {
 		t.Fatalf("binding after close=%v tunnels=%d", bound, engine.TunnelCount())
+	}
+}
+
+func TestPendingCryptoCannotReviveClosedProtectedSession(t *testing.T) {
+	for _, retire := range []string{"ike", "esp", "ppp"} {
+		t.Run(retire, func(t *testing.T) {
+			engine, info := pipelineSession(t)
+			registry := ipsec.NewESPRegistry()
+			defer registry.Close()
+			peer := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 4500}
+			pair := testESPPair(isakmp.EncapsulationNATTTransport)
+			pair.ResponderCookie = isakmp.Cookie{9}
+			if err := registry.Install(peer, pair); err != nil {
+				t.Fatal(err)
+			}
+			association := openTestAssociation(t, registry, peer, pair)
+			bridge, _ := NewESPBridge(engine, registry)
+			key := flowKey(info.Peer)
+			bridge.flows[key] = espFlow{session: association, peer: peer, logicalPeer: info.Peer, clientPort: 1701}
+			ipv4 := make([]byte, 20)
+			ipv4[0] = 0x45
+			ipv4[3] = 20
+			frame, err := (ppp.Frame{Protocol: ppp.ProtocolIPv4, Payload: ipv4}).MarshalBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			l2tpWire, err := (l2tp.Packet{TunnelID: info.TunnelID, SessionID: info.SessionID, Payload: frame}).MarshalBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := esp.NewSA(esp.SAConfig{SPI: pair.Inbound.SPI, Transform: pair.Transform, EncryptionKey: pair.Inbound.EncryptionKey, AuthenticationKey: pair.Inbound.AuthenticationKey})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = client.Seal([]byte{0}, 17) // sequence one was consumed by openTestAssociation
+			wire, err := client.Seal(encodeUDP(1701, 1701, l2tpWire), esp.IPProtocolUDP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, err := registry.Precheck(peer, wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch retire {
+			case "ike":
+				registry.RemoveIKE(pair.ResponderCookie)
+				bridge.CloseIKE(pair.ResponderCookie)
+			case "esp":
+				registry.Remove(pair.Inbound.SPI)
+				engine.ClosePeer(info.Peer)
+			case "ppp":
+				engine.ClosePeer(info.Peer)
+			}
+			// This is the same retained phased work item a worker holds across teardown.
+			pending.Authenticate()
+			sa, payload, next, err := pending.Commit()
+			delivered := false
+			bridge.HandleResult = func(_ context.Context, r ESPBridgeResult) error {
+				delivered = r.L2TP.Opened != nil || r.L2TP.Data != nil
+				return nil
+			}
+			if retire == "ppp" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := bridge.HandleDecryptedPacket(context.Background(), sa, peer, payload, next, time.Now())
+				if err == nil && result.Dispatch != nil {
+					if err := result.Dispatch(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+			} else if err != ipsec.ErrUnknownESP {
+				t.Fatalf("retired commit=%v", err)
+			}
+			if delivered || engine.TunnelCount() != 0 {
+				t.Fatalf("resurrection delivered=%v tunnels=%d", delivered, engine.TunnelCount())
+			}
+		})
 	}
 }

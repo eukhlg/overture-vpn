@@ -170,3 +170,19 @@ func TestOwnedReturnRouteTransfersStorage(t *testing.T) {
 		t.Fatal("no-route packet leaked")
 	}
 }
+
+func TestProtectedRouteCannotBindAfterSessionClose(t *testing.T) {
+	device := newMemoryDevice()
+	router, err := NewRouter(device)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithBindingGuard(context.Background(), func(func()) bool { return false })
+	packet := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	if err := router.RouteIPv4(ctx, server.DataFrame{IPv4: packet}, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(router.routes) != 0 || len(device.written) != 0 {
+		t.Fatal("closed protected session published a route or TUN write")
+	}
+}

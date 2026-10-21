@@ -138,21 +138,7 @@ func TestReceivePipelineMixedAuthenticatedSAs(t *testing.T) {
 
 func TestReceivePipelineMaintainsWhileDeliveryRuns(t *testing.T) {
 	peer := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 4500}
-	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte("psk"), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, Data: []byte{192, 0, 2, 1}}, Random: bytes.NewReader(bytes.Repeat([]byte{0x77}, 1024)), HandshakeTimeout: time.Minute})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transform := isakmp.Transform{Number: 1, ID: isakmp.TransformIKE, Attributes: []isakmp.Attribute{
-		isakmp.TVAttribute(isakmp.AttributeP1Encryption, isakmp.EncryptionAESCBC), isakmp.TVAttribute(isakmp.AttributeP1Hash, isakmp.HashSHA1), isakmp.TVAttribute(isakmp.AttributeP1AuthMethod, isakmp.AuthPreSharedKey), isakmp.TVAttribute(isakmp.AttributeP1DHGroup, isakmp.DHGroup2), isakmp.TVAttribute(isakmp.AttributeP1KeyLength, 128),
-	}}
-	sa := isakmp.SecurityAssociation{DOI: isakmp.DOIIPsec, Situation: isakmp.SituationIdentityOnly, Proposals: []isakmp.Proposal{{Number: 1, ProtocolID: isakmp.ProtocolIKE, Transforms: []isakmp.Transform{transform}}}}
-	request, err := (isakmp.Packet{InitiatorCookie: isakmp.Cookie{1}, Exchange: isakmp.ExchangeIdentityProtect, Payloads: []isakmp.Payload{sa}}).MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := control.HandleDatagram(peer, request, time.Now().Add(-2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	control := expiredPipelineControl(t, peer)
 	conn := &pipelinePacketConn{packets: make(chan []byte, 1), stopped: make(chan struct{}), peer: peer, timeoutWhenEmpty: true}
 	conn.packets <- []byte{1, 2, 3, 4, 5, 6, 7, 8}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,4 +169,25 @@ func TestReceivePipelineMaintainsWhileDeliveryRuns(t *testing.T) {
 	if !maintained || !finished || control.SACount() != 0 {
 		t.Fatalf("maintained=%v callback finished=%v SAs=%d", maintained, finished, control.SACount())
 	}
+}
+
+func expiredPipelineControl(t *testing.T, peer net.Addr) *isakmp.ControlPlane {
+	t.Helper()
+	control, err := isakmp.NewControlPlane(isakmp.ControlPlaneConfig{PreSharedKey: []byte("psk"), ResponderID: isakmp.Identification{IDType: isakmp.IDIPv4Address, Data: []byte{192, 0, 2, 1}}, Random: bytes.NewReader(bytes.Repeat([]byte{0x77}, 1024)), HandshakeTimeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transform := isakmp.Transform{Number: 1, ID: isakmp.TransformIKE, Attributes: []isakmp.Attribute{
+		isakmp.TVAttribute(isakmp.AttributeP1Encryption, isakmp.EncryptionAESCBC), isakmp.TVAttribute(isakmp.AttributeP1Hash, isakmp.HashSHA1), isakmp.TVAttribute(isakmp.AttributeP1AuthMethod, isakmp.AuthPreSharedKey), isakmp.TVAttribute(isakmp.AttributeP1DHGroup, isakmp.DHGroup2), isakmp.TVAttribute(isakmp.AttributeP1KeyLength, 128),
+	}}
+	sa := isakmp.SecurityAssociation{DOI: isakmp.DOIIPsec, Situation: isakmp.SituationIdentityOnly, Proposals: []isakmp.Proposal{{Number: 1, ProtocolID: isakmp.ProtocolIKE, Transforms: []isakmp.Transform{transform}}}}
+	request, err := (isakmp.Packet{InitiatorCookie: isakmp.Cookie{1}, Exchange: isakmp.ExchangeIdentityProtect, Payloads: []isakmp.Payload{sa}}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := control.HandleDatagram(peer, request, time.Now().Add(-2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	return control
 }
