@@ -175,10 +175,11 @@ func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) erro
 		buffer.Release()
 		return errors.New("esp bridge: sender is not configured")
 	}
-	b.mu.Lock()
-	flow, ok := b.flows[flowKey(peer)]
+	key := flowKey(peer)
+	b.mu.RLock()
+	flow, ok := b.flows[key]
+	b.mu.RUnlock()
 	if !ok {
-		b.mu.Unlock()
 		buffer.Release()
 		return ipsec.ErrESPPeer
 	}
@@ -205,13 +206,26 @@ func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) erro
 		b.Registry.Remove(flow.session.InboundSPI())
 	}
 	if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, esp.ErrSALifetime) {
-		if replacement := b.Registry.Replacement(flow.session); replacement != nil {
-			flow.session, flow.peer = replacement, replacement.Peer()
-			b.flows[flowKey(peer)] = flow
+		// Re-read under the write lock: inbound traffic may already have replaced
+		// this flow, or CloseIKE may have removed it while sealing was in progress.
+		// Never publish a replacement from the stale snapshot taken above.
+		b.mu.Lock()
+		current, exists := b.flows[key]
+		if exists {
+			if replacement := b.Registry.Replacement(current.session); replacement != nil && replacement.Active() {
+				current.session, current.peer = replacement, replacement.Peer()
+				b.flows[key] = current
+			}
+			flow = current
+		}
+		b.mu.Unlock()
+		if !exists {
+			err = ipsec.ErrUnknownESP
+		} else if flow.session.Active() {
 			datagram, err = seal()
 		}
 	}
-	b.mu.Unlock()
+
 	if err != nil {
 		buffer.Release()
 		return err
