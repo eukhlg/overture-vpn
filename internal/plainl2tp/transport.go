@@ -12,6 +12,15 @@ import (
 	"github.com/eukhlg/l2tp-go/server"
 )
 
+// Compile-time checks: l2tp-go discovers these optional capabilities by type
+// assertion, so a signature drift would otherwise silently disable batching.
+var (
+	_ server.BatchPacketConn        = (*Transport)(nil)
+	_ server.ReceiveBufferAllocator = (*Transport)(nil)
+	_ server.OwnedPacketWriter      = (*Transport)(nil)
+	_ server.SessionDatagramWriter  = (*Transport)(nil)
+)
+
 type Transport struct {
 	net.PacketConn
 	receiver *udptransport.Conn
@@ -20,12 +29,16 @@ type Transport struct {
 }
 
 func New(conn net.PacketConn) (*Transport, error) {
+	// One batch socket serves both directions: udptransport.Conn keeps separate
+	// rx/tx scratch and fallback state, so a single reader (Serve) and a single
+	// writer (the sender worker) may use it concurrently.
+	udp := udptransport.New(conn)
 	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
-	sender, err := udptransport.NewSenderWithWriter(context.Background(), conn, udptransport.New(conn), udptransport.SenderQueueCapacity)
+	sender, err := udptransport.NewSenderWithWriter(context.Background(), conn, udp, udptransport.SenderQueueCapacity)
 	if err != nil {
 		return nil, err
 	}
-	return &Transport{PacketConn: conn, receiver: udptransport.New(conn), sender: sender}, nil
+	return &Transport{PacketConn: conn, receiver: udp, sender: sender}, nil
 }
 
 func (t *Transport) BatchSize() int { return t.receiver.BatchSize() }
@@ -88,4 +101,14 @@ func (t *Transport) WriteSessionPacket(payload []byte, peer net.Addr, eligible f
 	return t.WritePacket(buffer, peer, eligible)
 }
 func (t *Transport) Flush(ctx context.Context) error { return t.sender.Flush(ctx) }
-func (t *Transport) Close() error                    { t.sender.Close(); return nil }
+
+// Close stops the sender, which also closes the socket. Queued datagrams are
+// discarded; callers needing delivery must Flush first. A prior write failure
+// is reported, while the cancellation caused by Close itself is not.
+func (t *Transport) Close() error {
+	t.sender.Close()
+	if err := t.sender.Err(); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
