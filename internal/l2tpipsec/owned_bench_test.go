@@ -3,10 +3,10 @@ package l2tpipsec
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
+	"github.com/eukhlg/netio/packetbuf"
 	"testing"
 )
 

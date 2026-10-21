@@ -7,9 +7,9 @@ import (
 	"errors"
 	"net"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
-	"github.com/eukhlg/ipsec-go/udptransport"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
+	"github.com/eukhlg/netio/udptransport"
 )
 
 // Compile-time checks: l2tp-go discovers these optional capabilities by type

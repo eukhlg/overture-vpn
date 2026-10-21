@@ -4,10 +4,11 @@ A lightweight Go L2TPv2 server. The current server
 supports raw (unencrypted) L2TP, PPP LCP, MS-CHAPv2 and PAP authentication,
 IPCP, IPv4, and a native TUN data path on Linux and macOS.
 
-Overture uses two independent Go modules:
+Overture uses three independent Go modules:
 
 - [l2tp-go](https://github.com/eukhlg/l2tp-go): L2TPv2, PPP, and the embeddable session engine
 - [ipsec-go](https://github.com/eukhlg/ipsec-go): IKEv1, ESP, NAT-T, and association lifecycle
+- [netio](https://github.com/eukhlg/netio): pooled packet buffers and batched UDP I/O shared by both data paths
 
 The application owns configuration, the protected L2TP adapter, native TUN
 routing, and deployment. See [embedding and architecture](EMBEDDING.md) and the

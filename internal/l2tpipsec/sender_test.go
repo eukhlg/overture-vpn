@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	ipsec "github.com/eukhlg/ipsec-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 type senderConn struct {

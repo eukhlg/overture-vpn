@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 func TestAdapterMixedDestinationsAndTransfer(t *testing.T) {

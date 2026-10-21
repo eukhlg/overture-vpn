@@ -9,7 +9,7 @@ import (
 	"time"
 
 	ipsec "github.com/eukhlg/ipsec-go/server"
-	"github.com/eukhlg/ipsec-go/udptransport"
+	"github.com/eukhlg/netio/udptransport"
 )
 
 type batchWriteFunc func([]udptransport.Message) (int, error)

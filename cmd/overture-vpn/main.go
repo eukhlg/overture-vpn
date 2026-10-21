@@ -13,9 +13,9 @@ import (
 	"syscall"
 
 	"errors"
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )

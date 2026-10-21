@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 func TestOwnedSendDoesNotRequireFlowWriteLock(t *testing.T) {

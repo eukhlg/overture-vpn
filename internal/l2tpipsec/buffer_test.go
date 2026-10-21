@@ -6,13 +6,13 @@ import (
 	"net"
 	"testing"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 func TestFramingViewCompatibility(t *testing.T) {
