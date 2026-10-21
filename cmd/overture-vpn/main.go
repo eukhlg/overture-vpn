@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -91,16 +92,23 @@ func main() {
 	if resolved.Server.Debug >= 2 {
 		serverConfig.Tracef = func(format string, args ...any) { log.Printf("TRACE "+format, args...) }
 	}
-	s, err := server.Listen(resolved.Server.Listen, serverConfig)
+	// Build the batched transport before the server exists, so the server
+	// only ever sees the adapter and never the raw socket.
+	conn, err := net.ListenPacket("udp", resolved.Server.Listen)
 	if err != nil {
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.New(s.Conn)
+	plain, err := plainl2tp.New(conn) // owns conn from here on
 	if err != nil {
-		s.Close()
+		conn.Close()
 		log.Fatal(err)
 	}
-	s.Conn = plain
+	s, err := server.New(plain, serverConfig)
+	if err != nil {
+		plain.Close()
+		log.Fatal(err)
+	}
+	// Callbacks get borrowed views of plain's pooled receive buffers (see server.BorrowedReceive).
 	s.BorrowedReceive = true
 	defer s.Close()
 	var router *tun.Router
