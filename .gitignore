@@ -28,3 +28,6 @@
 *.swp
 *.swo
 *~
+
+# Python bytecode from benchmark/CI scripts
+__pycache__/
