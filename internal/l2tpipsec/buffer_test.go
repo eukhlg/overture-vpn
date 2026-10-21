@@ -71,7 +71,7 @@ func TestOwnedBridgeReplacementAndEnqueueFailure(t *testing.T) {
 		}
 		bridge, _ := NewESPBridge(server.NewEngine(server.Config{}), registry)
 		association := openTestAssociation(t, registry, peer, first)
-		bridge.flows[logical.String()] = espFlow{session: association, peer: peer, logicalPeer: logical, clientPort: 40000}
+		bridge.flows[flowKey(logical)] = espFlow{session: association, peer: peer, logicalPeer: logical, clientPort: 40000}
 		if err := registry.Install(peer, second); err != nil {
 			t.Fatal(err)
 		}
