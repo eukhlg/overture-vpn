@@ -1,13 +1,9 @@
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021110903-d3214a937e40 h1:OE3qvdNQfybyPETFpDdlf6anwUyJhPslonjNm0ih728=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021110903-d3214a937e40/go.mod h1:2F1/feAA66NerFUdZNEJ7sqVQEysXjR9vlFt84TUZSE=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021111736-e62017176698 h1:OLPEJ//EePVylT6dD+MUV9cYo6HQPsjnG3YOfDKXjBQ=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021111736-e62017176698/go.mod h1:2F1/feAA66NerFUdZNEJ7sqVQEysXjR9vlFt84TUZSE=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021131321-e7a16f7f8435 h1:BpXvTRXLWUmTkK0Rr5TthrFCvvLG2n8qocfd8/uf61E=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261021131321-e7a16f7f8435/go.mod h1:2F1/feAA66NerFUdZNEJ7sqVQEysXjR9vlFt84TUZSE=
-github.com/eukhlg/l2tp-go v0.3.1-0.20261021110900-2bc713ce9623 h1:I7QZDZfxCWrHng7FE5REwfPMujp65h8HALJK56ugP5c=
-github.com/eukhlg/l2tp-go v0.3.1-0.20261021110900-2bc713ce9623/go.mod h1:GQ3Sh9qv0ROdKdam/fEf161nS26ES+mtlOX49CAZ5CE=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261021140730-c55ad4624318 h1:qmOaMKvE+sFdYoJtQujL0yvh6FCPQF+5uwDBXjbNkKk=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261021140730-c55ad4624318/go.mod h1:2S2jlUy8wCqJuwEnMuWBb7Tw5HHSblDOSeX+pu3tH6M=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261021131321-64e8a9271471 h1:dxKLjWv31uA3+dguFnkhKOtQ6jKLunxgeyViNu3SWV4=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261021131321-64e8a9271471/go.mod h1:GQ3Sh9qv0ROdKdam/fEf161nS26ES+mtlOX49CAZ5CE=
+github.com/eukhlg/netio v0.0.0-20261021135112-192b7a1678cd h1:Cv7V+dxHl8faoM8VovbQVA9o3/U2AUPfH9fF/dzkl8Q=
+github.com/eukhlg/netio v0.0.0-20261021135112-192b7a1678cd/go.mod h1:MGjORjEdlvdxIA8y33aXnns03ltdmJhNXOGppoFCkEA=
 github.com/pelletier/go-toml/v2 v2.4.2 h1:M2fKKbmyvI+hGId/D0W64qDBMVhJnNR10O5gIbMc//Q=
 github.com/pelletier/go-toml/v2 v2.4.2/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 golang.org/x/net v0.47.0 h1:Mx+4dIFzqraBXUugkia1OOvlD6LemFo1ALMHjrXDOhY=
