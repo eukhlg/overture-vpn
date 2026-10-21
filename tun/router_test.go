@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 type memoryDevice struct {

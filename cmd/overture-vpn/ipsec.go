@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	"github.com/eukhlg/ipsec-go/protocol/isakmp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
 	"github.com/eukhlg/overture-vpn/tun"
 )

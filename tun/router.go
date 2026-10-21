@@ -8,8 +8,8 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/eukhlg/ipsec-go/packetbuf"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 var (

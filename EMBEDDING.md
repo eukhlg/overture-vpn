@@ -11,6 +11,8 @@ independently versioned Go modules, neither of which imports the other.
 | `github.com/eukhlg/ipsec-go/protocol/isakmp` | IKEv1 control plane |
 | `github.com/eukhlg/ipsec-go/protocol/esp` | ESP protection, replay checks, and NAT-T framing |
 | `github.com/eukhlg/ipsec-go/server` | IKE/NAT-T/raw ESP listeners and association registry |
+| `github.com/eukhlg/netio/packetbuf` | Exclusively owned pooled packet buffers |
+| `github.com/eukhlg/netio/udptransport` | Batched UDP I/O and bounded owned sender |
 
 ## L2TP packet boundary
 
