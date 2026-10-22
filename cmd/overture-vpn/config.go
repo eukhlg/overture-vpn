@@ -12,6 +12,7 @@ import (
 
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
+	"github.com/eukhlg/netio/udptransport"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -45,8 +46,14 @@ type appConfig struct {
 		Enabled   bool   `toml:"enabled"`
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
+	L2TP struct {
+		ReceiveBuffer int `toml:"receive_buffer"`
+		UDPBatch      int `toml:"udp_batch"`
+	} `toml:"l2tp"`
 	IPsec struct {
 		Enabled          bool   `toml:"enabled"`
+		ReceiveBuffer    int    `toml:"receive_buffer"`
+		UDPBatch         int    `toml:"udp_batch"`
 		IKEListen        string `toml:"ike_listen"`
 		NATTListen       string `toml:"natt_listen"`
 		ESPListen        string `toml:"esp_listen"`
@@ -91,6 +98,8 @@ func defaultConfig() appConfig {
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
+	c.L2TP.UDPBatch = udptransport.DefaultBatchSize
+	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 256*1024, 128
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10
@@ -137,6 +146,12 @@ func defaultReceiveWorkers(maxProcs int) int {
 }
 
 func applyEnvironment(c *appConfig) error {
+	if err := overrideInt("L2TP_RECEIVE_BUFFER", &c.L2TP.ReceiveBuffer); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_UDP_BATCH", &c.L2TP.UDPBatch); err != nil {
+		return err
+	}
 	overrideString("L2TP_LISTEN", &c.Server.Listen)
 	overrideString("L2TP_HOSTNAME", &c.Server.Hostname)
 	if err := overrideInt("L2TP_DEBUG", &c.Server.Debug); err != nil {
@@ -186,6 +201,12 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideBool("L2TP_IPSEC_ENABLED", &c.IPsec.Enabled); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_IPSEC_RECEIVE_BUFFER", &c.IPsec.ReceiveBuffer); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_IPSEC_UDP_BATCH", &c.IPsec.UDPBatch); err != nil {
+		return err
+	}
 	overrideString("L2TP_IPSEC_IKE_LISTEN", &c.IPsec.IKEListen)
 	overrideString("L2TP_IPSEC_NATT_LISTEN", &c.IPsec.NATTListen)
 	overrideString("L2TP_IPSEC_ESP_LISTEN", &c.IPsec.ESPListen)
@@ -228,6 +249,18 @@ func applyEnvironment(c *appConfig) error {
 }
 
 func (c appConfig) validate() (networkConfig, map[string]string, error) {
+	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
+		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")
+	}
+	if err := udptransport.ValidateBatchSize(c.L2TP.UDPBatch); err != nil {
+		return networkConfig{}, nil, fmt.Errorf("l2tp.udp_batch: %w", err)
+	}
+	if c.IPsec.ReceiveBuffer < 0 || int64(c.IPsec.ReceiveBuffer) > (1<<31-1)/2 {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.receive_buffer must be between 0 and 1073741823 bytes")
+	}
+	if err := udptransport.ValidateBatchSize(c.IPsec.UDPBatch); err != nil {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.udp_batch: %w", err)
+	}
 	if c.Server.Debug < 0 || c.Server.Debug > 2 {
 		return networkConfig{}, nil, fmt.Errorf("server.debug must be 0, 1, or 2")
 	}
