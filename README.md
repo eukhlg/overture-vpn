@@ -145,6 +145,11 @@ granting `CAP_NET_ADMIN` or raising `net.core.rmem_max`. Send buffers are unchan
 `[ipsec].udp_batch` (`L2TP_IPSEC_UDP_BATCH`) sets NAT-T receive and ESP sender
 batches from 1 to 256, default 32. Metadata is allocated once at startup.
 
+The plain UDP/1701 listener has independent `[l2tp].receive_buffer`
+(`L2TP_RECEIVE_BUFFER`) and `[l2tp].udp_batch` (`L2TP_UDP_BATCH`) settings,
+with defaults 0 (kernel receive buffer) and 32. The same size limits and
+startup logging apply. These options also affect UDP/1701 when IPsec is enabled.
+
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. Earlier VPS measurements with a 1 MiB request
 improved NAT-T upload from 576 to 740 Mbit/s while loaded p95 rose from 2.4 to

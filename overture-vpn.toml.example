@@ -31,6 +31,13 @@ enabled = true
 # Leave empty to discover the interface from the default IPv4 route.
 interface = ""
 
+[l2tp]
+# Plain UDP/1701 receive buffer in bytes; L2TP_RECEIVE_BUFFER. 0 keeps the
+# kernel default. Larger buffers can add queueing delay under saturation.
+receive_buffer = 0
+# Receive/send batch size, 1..256; L2TP_UDP_BATCH.
+udp_batch = 32
+
 [ipsec]
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
 # L2TP_IPSEC_RECEIVE_BUFFER overrides this value. Linux reports 2x the request.

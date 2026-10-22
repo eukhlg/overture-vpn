@@ -17,6 +17,7 @@ import (
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
+	"github.com/eukhlg/netio/udptransport"
 	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )
@@ -99,7 +100,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.New(conn) // owns conn from here on
+	if err := configureReceiveBuffer("plain L2TP", conn, resolved.L2TP.ReceiveBuffer, udptransport.SetReceiveBuffer, log.Printf); err != nil {
+		_ = conn.Close()
+		log.Fatal(err)
+	}
+	plain, err := plainl2tp.New(conn, resolved.L2TP.UDPBatch) // owns conn from here on
 	if err != nil {
 		conn.Close()
 		log.Fatal(err)

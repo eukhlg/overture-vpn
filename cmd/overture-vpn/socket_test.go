@@ -14,7 +14,7 @@ type socketTestConn struct{ net.PacketConn }
 func TestListenerReceiveBufferWiring(t *testing.T) {
 	c := defaultConfig()
 	c.IPsec.ReceiveBuffer = 1048576
-	for _, listener := range []string{"raw ESP", "NAT-T"} {
+	for _, listener := range []string{"raw ESP", "NAT-T", "plain L2TP"} {
 		conn := &socketTestConn{}
 		for _, effective := range []int{212992, 2 * 1048576} {
 			var logs []string
