@@ -246,7 +246,7 @@ func TestConfigPathPrecedence(t *testing.T) {
 func TestIPsecSocketConfig(t *testing.T) {
 	clearConfigEnvironment(t)
 	c, err := loadConfig("")
-	if err != nil || c.IPsec.ReceiveBuffer != 0 || c.IPsec.UDPBatch != 32 {
+	if err != nil || c.IPsec.ReceiveBuffer != 262144 || c.IPsec.UDPBatch != 128 {
 		t.Fatalf("defaults: %+v %v", c.IPsec, err)
 	}
 	path := writeConfig(t, "[ipsec]\nreceive_buffer=1048576\nudp_batch=128\n")
@@ -259,6 +259,11 @@ func TestIPsecSocketConfig(t *testing.T) {
 	c, err = loadConfig(path)
 	if err != nil || c.IPsec.ReceiveBuffer != 262144 || c.IPsec.UDPBatch != 1 {
 		t.Fatalf("env: %+v %v", c.IPsec, err)
+	}
+	t.Setenv("L2TP_IPSEC_RECEIVE_BUFFER", "0")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.ReceiveBuffer != 0 {
+		t.Fatalf("kernel default override: %+v %v", c.IPsec, err)
 	}
 	for _, key := range []string{"L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH"} {
 		t.Run(key, func(t *testing.T) {

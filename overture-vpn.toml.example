@@ -42,10 +42,13 @@ udp_batch = 32
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
 # L2TP_IPSEC_RECEIVE_BUFFER overrides this value. Linux reports 2x the request.
 # Larger buffers reduce drops and can improve throughput, at the cost of more
-# queueing delay under saturation (VPS 1 MiB: loaded p95 2.4 -> 13.6 ms).
-receive_buffer = 0
+# queueing delay under saturation. VPS at batch 128: loaded p95 was 2.48 ms
+# at kernel default, 4.39 ms at 256 KiB, and 11.94 ms at 1 MiB.
+# 256 KiB is the smallest tested positive request; use 0 for lower loaded delay.
+receive_buffer = 262144
 # NAT-T receive and ESP sender batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
-udp_batch = 32
+# 128 gained 3.3% geometric-mean throughput in the VPS matrix, using more RX storage.
+udp_batch = 128
 # Omit for an automatic count of clamp(GOMAXPROCS/3, 1, 4).
 # Set explicitly to override; 0 or 1 uses the serial receive path.
 # receive_workers = 2

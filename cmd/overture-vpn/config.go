@@ -99,7 +99,7 @@ func defaultConfig() appConfig {
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
 	c.L2TP.UDPBatch = udptransport.DefaultBatchSize
-	c.IPsec.UDPBatch = udptransport.DefaultBatchSize
+	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 256*1024, 128
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10

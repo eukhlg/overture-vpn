@@ -137,13 +137,14 @@ variable overrides TOML. Values 0 and 1 select serial processing, and values
 through 64 are accepted. Startup logs the effective count and its source.
 
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
-buffer in bytes for each NAT-T and raw ESP listener. The default, `0`, keeps
-the kernel setting. Positive values set `SO_RCVBUF`, then on Linux attempt
+buffer in bytes for each NAT-T and raw ESP listener. The default is 262144
+(256 KiB); set `0` to keep the kernel setting. Values through 1073741823 bytes
+are accepted. Positive values set `SO_RCVBUF`, then on Linux attempt
 `SO_RCVBUFFORCE` with `CAP_NET_ADMIN`. Startup logs the requested and effective
 bytes and `forced`; Linux reports twice the request. A cap warning suggests
 granting `CAP_NET_ADMIN` or raising `net.core.rmem_max`. Send buffers are unchanged.
 `[ipsec].udp_batch` (`L2TP_IPSEC_UDP_BATCH`) sets NAT-T receive and ESP sender
-batches from 1 to 256, default 32. Metadata is allocated once at startup.
+batches from 1 to 256, default 128. Metadata is allocated once at startup.
 
 The plain UDP/1701 listener has independent `[l2tp].receive_buffer`
 (`L2TP_RECEIVE_BUFFER`) and `[l2tp].udp_batch` (`L2TP_UDP_BATCH`) settings,
@@ -151,9 +152,14 @@ with defaults 0 (kernel receive buffer) and 32. The same size limits and
 startup logging apply. These options also affect UDP/1701 when IPsec is enabled.
 
 A larger receive buffer can improve throughput and reduce drops, but increases
-queueing delay under saturation. Earlier VPS measurements with a 1 MiB request
-improved NAT-T upload from 576 to 740 Mbit/s while loaded p95 rose from 2.4 to
-13.6 ms. Choose a value appropriate to your latency budget.
+queueing delay under saturation. In the socket-tuning VPS run at batch 128,
+a 256 KiB request improved mean one-stream NAT-T upload from 592 to 791 Mbit/s,
+while loaded p95 rose from 2.48 to 4.39 ms. A 1 MiB request reached 864 Mbit/s
+but raised loaded p95 to 11.94 ms. The 256 KiB default is the smallest tested
+positive request and a throughput/latency compromise. Choose `0` for the
+kernel buffer when lower loaded delay matters more. Batch 128 gained 3.3% in
+geometric mean across the matrix; it retains more receive storage than 32.
+These are short same-host VPS results, not a universal capacity guarantee.
 
 Server and pool-start settings accept either a full IPv4 address or a host
 offset within the subnet. For example, subnet `10.0.0.0/24`, server address
