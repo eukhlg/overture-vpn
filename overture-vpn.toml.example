@@ -32,6 +32,13 @@ enabled = true
 interface = ""
 
 [ipsec]
+# Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
+# L2TP_IPSEC_RECEIVE_BUFFER overrides this value. Linux reports 2x the request.
+# Larger buffers reduce drops and can improve throughput, at the cost of more
+# queueing delay under saturation (VPS 1 MiB: loaded p95 2.4 -> 13.6 ms).
+receive_buffer = 0
+# NAT-T receive and ESP sender batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
+udp_batch = 32
 # Omit for an automatic count of clamp(GOMAXPROCS/3, 1, 4).
 # Set explicitly to override; 0 or 1 uses the serial receive path.
 # receive_workers = 2

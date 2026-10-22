@@ -136,6 +136,20 @@ on 6–8, three on 9–11, and four on 12 or more. Set `receive_workers` or
 variable overrides TOML. Values 0 and 1 select serial processing, and values
 through 64 are accepted. Startup logs the effective count and its source.
 
+`[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
+buffer in bytes for each NAT-T and raw ESP listener. The default, `0`, keeps
+the kernel setting. Positive values set `SO_RCVBUF`, then on Linux attempt
+`SO_RCVBUFFORCE` with `CAP_NET_ADMIN`. Startup logs the requested and effective
+bytes and `forced`; Linux reports twice the request. A cap warning suggests
+granting `CAP_NET_ADMIN` or raising `net.core.rmem_max`. Send buffers are unchanged.
+`[ipsec].udp_batch` (`L2TP_IPSEC_UDP_BATCH`) sets NAT-T receive and ESP sender
+batches from 1 to 256, default 32. Metadata is allocated once at startup.
+
+A larger receive buffer can improve throughput and reduce drops, but increases
+queueing delay under saturation. Earlier VPS measurements with a 1 MiB request
+improved NAT-T upload from 576 to 740 Mbit/s while loaded p95 rose from 2.4 to
+13.6 ms. Choose a value appropriate to your latency budget.
+
 Server and pool-start settings accept either a full IPv4 address or a host
 offset within the subnet. For example, subnet `10.0.0.0/24`, server address
 `1`, pool start `100`, and pool size `50` produce server `10.0.0.1` and leases

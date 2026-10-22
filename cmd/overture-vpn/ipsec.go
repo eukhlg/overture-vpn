@@ -15,6 +15,7 @@ import (
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
+	"github.com/eukhlg/netio/udptransport"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
 	"github.com/eukhlg/overture-vpn/tun"
 )
@@ -72,12 +73,24 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, fmt.Errorf("listen raw ESP: %w", err)
 	}
+	if err := configureReceiveBuffer("raw ESP", raw.Conn, config.IPsec.ReceiveBuffer, udptransport.SetReceiveBuffer, log.Printf); err != nil {
+		_ = raw.Close()
+		_ = ike.Close()
+		return nil, err
+	}
 	natt, err := ipsec.ListenNATTWithIKE(config.IPsec.NATTListen, bridge.HandlePacket, control)
 	if err != nil {
 		_ = raw.Close()
 		_ = ike.Close()
 		return nil, fmt.Errorf("listen NAT-T: %w", err)
 	}
+	if err := configureReceiveBuffer("NAT-T", natt.Conn, config.IPsec.ReceiveBuffer, udptransport.SetReceiveBuffer, log.Printf); err != nil {
+		_ = natt.Close()
+		_ = raw.Close()
+		_ = ike.Close()
+		return nil, err
+	}
+	natt.UDPBatchSize = config.IPsec.UDPBatch
 	raw.HandlePacketInPlace, natt.HandlePacketInPlace = bridge.HandlePacketInPlace, bridge.HandlePacketInPlace
 	raw.Registry, natt.Registry = registry, registry
 	raw.ReceiveWorkers, natt.ReceiveWorkers = config.IPsec.ReceiveWorkers, config.IPsec.ReceiveWorkers
@@ -125,7 +138,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	sender, err := l2tpipsec.NewESPSender(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity)
+	sender, err := l2tpipsec.NewESPSender(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity, config.IPsec.UDPBatch)
 	if err != nil {
 		cancel()
 		_ = raw.Close()

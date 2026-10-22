@@ -11,7 +11,7 @@ import (
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
+		"L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
@@ -239,6 +239,49 @@ func TestConfigPathPrecedence(t *testing.T) {
 	for _, args := range [][]string{{"--config", "explicit.toml"}, {"--config=explicit.toml"}} {
 		if got := configPathFromArgs(args); got != "explicit.toml" {
 			t.Fatal(got)
+		}
+	}
+}
+
+func TestIPsecSocketConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || c.IPsec.ReceiveBuffer != 0 || c.IPsec.UDPBatch != 32 {
+		t.Fatalf("defaults: %+v %v", c.IPsec, err)
+	}
+	path := writeConfig(t, "[ipsec]\nreceive_buffer=1048576\nudp_batch=128\n")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.ReceiveBuffer != 1048576 || c.IPsec.UDPBatch != 128 {
+		t.Fatalf("config: %+v %v", c.IPsec, err)
+	}
+	t.Setenv("L2TP_IPSEC_RECEIVE_BUFFER", "262144")
+	t.Setenv("L2TP_IPSEC_UDP_BATCH", "1")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.ReceiveBuffer != 262144 || c.IPsec.UDPBatch != 1 {
+		t.Fatalf("env: %+v %v", c.IPsec, err)
+	}
+	for _, key := range []string{"L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, "bad")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("invalid integer accepted")
+			}
+		})
+	}
+	for _, key := range []string{"receive_buffer", "udp_batch"} {
+		for _, value := range []int{-1, 0, 1, 32, 128, 256, 257, 1 << 30} {
+			c := defaultConfig()
+			c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+			valid := value >= 1 && value <= 256
+			if key == "receive_buffer" {
+				c.IPsec.ReceiveBuffer = value
+				valid = value >= 0 && value <= (1<<31-1)/2
+			} else {
+				c.IPsec.UDPBatch = value
+			}
+			if _, _, err := c.validate(); (err == nil) != valid {
+				t.Fatalf("%s=%d valid=%v err=%v", key, value, valid, err)
+			}
 		}
 	}
 }
