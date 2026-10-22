@@ -36,22 +36,40 @@ type ESPSender struct {
 	err            error
 	submitMu       sync.Mutex
 	closeOnce      sync.Once
+	packets        []encryptedPacket
+	messages       []udptransport.Message
+	indices        []int
 }
 
 type datagramWriter interface {
 	Write([]udptransport.Message) (int, error)
 }
 
-func NewESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int) (*ESPSender, error) {
-	return newESPSender(ctx, raw, natt, capacity, udptransport.New(natt))
+func NewESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, batchSize ...int) (*ESPSender, error) {
+	size, err := espBatchSize(batchSize)
+	if err != nil {
+		return nil, err
+	}
+	udp, err := udptransport.NewWithBatchSize(natt, size)
+	if err != nil {
+		return nil, err
+	}
+	return newESPSender(ctx, raw, natt, capacity, udp, size)
 }
 
-func newESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, udp datagramWriter) (*ESPSender, error) {
+func newESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, udp datagramWriter, batchSize ...int) (*ESPSender, error) {
+	size, err := espBatchSize(batchSize)
+	if err != nil {
+		return nil, err
+	}
 	if raw == nil || natt == nil || capacity < 1 {
 		return nil, errors.New("esp sender: sockets and positive capacity required")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	s := &ESPSender{ctx: ctx, cancel: cancel, raw: raw, natt: natt, queue: make(chan encryptedPacket, capacity), done: make(chan error, 1), stopped: make(chan struct{}), watcherStopped: make(chan struct{})}
+	s.packets = make([]encryptedPacket, size)
+	s.messages = make([]udptransport.Message, size)
+	s.indices = make([]int, size)
 	go func() {
 		defer close(s.watcherStopped)
 		<-ctx.Done()
@@ -114,9 +132,7 @@ func (s *ESPSender) run(udp datagramWriter) {
 		s.done <- failure
 		close(s.stopped)
 	}()
-	var packets [udptransport.BatchSize]encryptedPacket
-	var messages [udptransport.BatchSize]udptransport.Message
-	var indices [udptransport.BatchSize]int
+	packets, messages, indices := s.packets, s.messages, s.indices
 	for {
 		var count int
 		select {
@@ -218,4 +234,15 @@ func (s *ESPSender) run(udp datagramWriter) {
 func (s *ESPSender) Close() {
 	s.closeOnce.Do(s.cancel)
 	<-s.stopped
+}
+
+func espBatchSize(sizes []int) (int, error) {
+	size := udptransport.DefaultBatchSize
+	if len(sizes) > 1 {
+		return 0, errors.New("esp sender: at most one batch size required")
+	}
+	if len(sizes) == 1 {
+		size = sizes[0]
+	}
+	return size, udptransport.ValidateBatchSize(size)
 }

@@ -25,20 +25,30 @@ type Transport struct {
 	net.PacketConn
 	receiver *udptransport.Conn
 	sender   *udptransport.Sender
-	messages [udptransport.BatchSize]udptransport.Message
+	messages []udptransport.Message
 }
 
-func New(conn net.PacketConn) (*Transport, error) {
+func New(conn net.PacketConn, batchSize ...int) (*Transport, error) {
 	// One batch socket serves both directions: udptransport.Conn keeps separate
 	// rx/tx scratch and fallback state, so a single reader (Serve) and a single
 	// writer (the sender worker) may use it concurrently.
-	udp := udptransport.New(conn)
-	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
-	sender, err := udptransport.NewSenderWithWriter(context.Background(), conn, udp, udptransport.SenderQueueCapacity)
+	size := udptransport.DefaultBatchSize
+	if len(batchSize) > 1 {
+		return nil, errors.New("plain L2TP: at most one batch size required")
+	}
+	if len(batchSize) == 1 {
+		size = batchSize[0]
+	}
+	udp, err := udptransport.NewWithBatchSize(conn, size)
 	if err != nil {
 		return nil, err
 	}
-	return &Transport{PacketConn: conn, receiver: udp, sender: sender}, nil
+	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
+	sender, err := udptransport.NewSenderWithWriter(context.Background(), conn, udp, udptransport.SenderQueueCapacity, size)
+	if err != nil {
+		return nil, err
+	}
+	return &Transport{PacketConn: conn, receiver: udp, sender: sender, messages: make([]udptransport.Message, size)}, nil
 }
 
 func (t *Transport) BatchSize() int { return t.receiver.BatchSize() }
