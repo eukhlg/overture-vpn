@@ -18,6 +18,7 @@ import (
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/netio/udptransport"
+	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
 	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )
@@ -159,9 +160,21 @@ func main() {
 		}
 		return nil
 	}
+	var dropDebugf func(string, ...any)
+	if resolved.Server.Debug >= 1 {
+		dropDebugf = func(format string, args ...any) { log.Printf("DEBUG "+format, args...) }
+	}
+	drops := l2tpipsec.NewDropCounters(dropDebugf)
 	s.SessionClosed = func(_ context.Context, info server.SessionInfo) {
+		dropped := drops.Take(info.TunnelID, info.SessionID)
 		if info.Connected {
-			log.Printf("VPN client disconnected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
+			line := fmt.Sprintf("VPN client disconnected: user=%q address=%s protocol=%s peer=%s tunnel=%d session=%d", info.Username, info.Address, info.Protocol, info.Peer, info.TunnelID, info.SessionID)
+			if dropped != "" {
+				line += " drops=" + dropped
+			}
+			log.Print(line)
+		} else if dropped != "" {
+			log.Printf("VPN session closed before connecting: tunnel=%d session=%d drops=%s", info.TunnelID, info.SessionID, dropped)
 		}
 		if router != nil {
 			router.Forget(info.Address)
@@ -173,7 +186,7 @@ func main() {
 	var ipsec *ipsecRuntime
 	var ipsecDone <-chan error
 	if resolved.IPsec.Enabled {
-		ipsec, err = startIPsec(ctx, resolved, s, router)
+		ipsec, err = startIPsec(ctx, resolved, s, router, drops)
 		if err != nil {
 			log.Fatal(err)
 		}

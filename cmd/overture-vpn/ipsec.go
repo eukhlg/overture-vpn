@@ -32,7 +32,7 @@ type ipsecRuntime struct {
 	closeOnce sync.Once
 }
 
-func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server, router *tun.Router) (*ipsecRuntime, error) {
+func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server, router *tun.Router, drops *l2tpipsec.DropCounters) (*ipsecRuntime, error) {
 	identityIP := net.ParseIP(config.IPsec.ServerID).To4()
 	identity, _ := netip.ParseAddr(config.IPsec.ServerID)
 	ikeLifetime, _ := time.ParseDuration(config.IPsec.IKELifetime)
@@ -68,6 +68,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		control.NotePeerActivity(cookie, now)
 	})
 	bridge.Tracef, bridge.Debugf = tracef, debugf
+	bridge.Drops = drops
 	if debugf != nil {
 		registry.SetRemoveHandler(func(event ipsec.RemoveEvent) { debugf("%s", formatRemoveEvent(event)) })
 	}
@@ -158,23 +159,19 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 				return err
 			}
 			err = bridge.SendIPv4Buffer(tunnelID, sessionID, buffer)
-			if err != nil {
-				if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
-					if debugf != nil {
-						debugf("ipsec stale client packet dropped peer=%s error=%v", peer, err)
-					}
-					return nil
-				}
-				return err
+			if reason, dropped := downloadDrop(err); dropped {
+				drops.Record(tunnelID, sessionID, reason, peer, err)
+				return nil
 			}
-			return nil
+			return err
 		})
 		if err == nil && router != nil && result.L2TP.Opened != nil {
 			info := *result.L2TP.Opened
 			result.WithActive(func() {
 				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
 					err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
-					if errors.Is(err, ipsec.ErrUnknownESP) || errors.Is(err, ipsec.ErrESPPeer) || errors.Is(err, esp.ErrSALifetime) {
+					if reason, dropped := downloadDrop(err); dropped {
+						drops.Record(info.TunnelID, info.SessionID, reason, info.Peer, err)
 						return nil
 					}
 					return err
@@ -245,6 +242,23 @@ func (r *ipsecRuntime) Close() {
 		r.wg.Wait()
 		r.registry.Close()
 	})
+}
+
+// downloadDrop classifies send errors that mean the client's SA or flow is
+// gone. Such packets are dropped without failing the TUN read loop.
+func downloadDrop(err error) (l2tpipsec.DropReason, bool) {
+	switch {
+	case err == nil:
+		return 0, false
+	case errors.Is(err, esp.ErrSALifetime):
+		return l2tpipsec.DropDownSALifetime, true
+	case errors.Is(err, ipsec.ErrESPPeer):
+		return l2tpipsec.DropDownNoFlow, true
+	case errors.Is(err, ipsec.ErrUnknownESP):
+		return l2tpipsec.DropDownUnknownSA, true
+	default:
+		return 0, false
+	}
 }
 
 // formatRemoveEvent renders an ESP association removal for the debug log.

@@ -52,6 +52,8 @@ type ESPBridge struct {
 	Tracef                func(string, ...any)
 	Debugf                func(string, ...any)
 	HandleResult          func(context.Context, ESPBridgeResult) error
+	// Drops, when set, counts packets discarded at delivery and by owned sends.
+	Drops *DropCounters
 }
 
 func NewESPBridge(engine *server.Engine, registry *ipsec.ESPRegistry) (*ESPBridge, error) {
@@ -320,6 +322,18 @@ func (b *ESPBridge) HandleDecryptedPacket(ctx context.Context, session *ipsec.As
 	return b.packetResult(result), nil
 }
 
+// resultSession identifies the session whose data or binding a result carries.
+func resultSession(result server.Result) (uint16, uint16, bool) {
+	switch {
+	case result.Data != nil:
+		return result.Data.TunnelID, result.Data.Session.LocalID, true
+	case result.Opened != nil:
+		return result.Opened.TunnelID, result.Opened.SessionID, true
+	default:
+		return 0, 0, false
+	}
+}
+
 func (b *ESPBridge) resultEligibility(result server.Result) func() bool {
 	var tunnelID, sessionID uint16
 	if result.Opened != nil {
@@ -341,9 +355,18 @@ func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 		out.Dispatch = func(ctx context.Context) error {
 			b.mu.RLock()
 			flow, exists := b.flows[result.logicalKey]
-			eligible := exists && flow.session == result.association && result.association.Active()
 			b.mu.RUnlock()
-			eligible = eligible && sessionEligible()
+			eligible, reason := true, DropReason(0)
+			switch {
+			case !exists:
+				eligible, reason = false, DropUpFlowMissing
+			case flow.session != result.association:
+				eligible, reason = false, DropUpFlowMismatch
+			case !result.association.Active():
+				eligible, reason = false, DropUpSAInactive
+			case !sessionEligible():
+				eligible, reason = false, DropUpSessionIneligible
+			}
 			// Never hold b.mu while invoking callbacks: they may send, acquiring
 			// outboundMu and then b.mu. Never acquire outboundMu with b.mu held;
 			// recursive RLock can deadlock when a writer is waiting.
@@ -362,6 +385,9 @@ func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 				return true
 			}
 			if !eligible {
+				if tunnelID, sessionID, ok := resultSession(result.L2TP); ok {
+					b.Drops.Record(tunnelID, sessionID, reason, result.logicalKey, nil)
+				}
 				delivered.L2TP.Opened = nil
 				delivered.L2TP.Data = nil
 			}
