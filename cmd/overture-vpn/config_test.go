@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,9 +20,54 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
 		"L2TP_IPSEC_PSK", "L2TP_IPSEC_SERVER_ID", "L2TP_IPSEC_MAX_SAS",
-		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
+		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_RECEIVE_WORKERS", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
 	} {
 		t.Setenv(name, "")
+	}
+}
+
+func TestDefaultReceiveWorkersByCPUCount(t *testing.T) {
+	for _, test := range []struct{ cpus, want int }{
+		{1, 1}, {2, 1}, {5, 1}, {6, 2}, {8, 2}, {9, 3}, {11, 3}, {12, 4}, {64, 4},
+	} {
+		if got := defaultReceiveWorkers(test.cpus); got != test.want {
+			t.Errorf("defaultReceiveWorkers(%d)=%d, want %d", test.cpus, got, test.want)
+		}
+	}
+}
+
+func TestReceiveWorkersAutomaticAndExplicitOverrides(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := defaultReceiveWorkers(runtime.GOMAXPROCS(0)); c.IPsec.ReceiveWorkers != want || c.receiveWorkersSource != "automatic default" {
+		t.Fatalf("automatic workers=%d source=%q, want %d automatic default", c.IPsec.ReceiveWorkers, c.receiveWorkersSource, want)
+	}
+
+	path := writeConfig(t, "[[authentication.users]]\nusername = \"vpn\"\npassword = \"secret\"\n\n[ipsec]\nreceive_workers = 0\n")
+	c, err = loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IPsec.ReceiveWorkers != 0 || c.receiveWorkersSource != "config" {
+		t.Fatalf("config workers=%d source=%q", c.IPsec.ReceiveWorkers, c.receiveWorkersSource)
+	}
+	if _, _, err := c.validate(); err != nil {
+		t.Fatalf("explicit serial config rejected: %v", err)
+	}
+
+	t.Setenv("L2TP_IPSEC_RECEIVE_WORKERS", "1")
+	c, err = loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IPsec.ReceiveWorkers != 1 || c.receiveWorkersSource != "environment" {
+		t.Fatalf("environment workers=%d source=%q", c.IPsec.ReceiveWorkers, c.receiveWorkersSource)
+	}
+	if _, _, err := c.validate(); err != nil {
+		t.Fatalf("explicit serial environment value rejected: %v", err)
 	}
 }
 

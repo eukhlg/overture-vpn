@@ -60,6 +60,7 @@ func main() {
 		}
 		return
 	}
+	log.Printf("IPsec ESP receive workers=%d source=%s", resolved.IPsec.ReceiveWorkers, resolved.receiveWorkersSource)
 	parseIP := func(value string) netip.Addr {
 		address, err := netip.ParseAddr(value)
 		if err != nil || !address.Is4() {
