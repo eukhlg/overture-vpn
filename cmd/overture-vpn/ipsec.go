@@ -68,6 +68,9 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		control.NotePeerActivity(cookie, now)
 	})
 	bridge.Tracef, bridge.Debugf = tracef, debugf
+	if debugf != nil {
+		registry.SetRemoveHandler(func(event ipsec.RemoveEvent) { debugf("%s", formatRemoveEvent(event)) })
+	}
 	raw, err := ipsec.ListenRawESP(config.IPsec.ESPListen, bridge.HandlePacket)
 	if err != nil {
 		_ = ike.Close()
@@ -242,4 +245,21 @@ func (r *ipsecRuntime) Close() {
 		r.wg.Wait()
 		r.registry.Close()
 	})
+}
+
+// formatRemoveEvent renders an ESP association removal for the debug log.
+func formatRemoveEvent(event ipsec.RemoveEvent) string {
+	line := fmt.Sprintf("ipsec sa removed reason=%s peer=%v inbound_spi=%08x outbound_spi=%08x", event.Reason, event.Peer, event.InboundSPI, event.OutboundSPI)
+	if event.Direction != ipsec.RemoveDirectionNone {
+		line += fmt.Sprintf(" direction=%s", event.Direction)
+	}
+	if lifetime := event.Lifetime; lifetime != nil {
+		line += fmt.Sprintf(" limit=%s", lifetime.Reason)
+		if lifetime.Reason == esp.LifetimeTime {
+			line += fmt.Sprintf(" age=%s lifetime=%s", lifetime.Age, lifetime.Lifetime)
+		} else {
+			line += fmt.Sprintf(" packets=%d bytes=%d max=%d", lifetime.Packets, lifetime.Bytes, lifetime.Limit)
+		}
+	}
+	return line
 }
