@@ -52,15 +52,28 @@ func (r *Router) BindOwned(address netip.Addr, send func(*packetbuf.Buffer) erro
 	r.mu.Unlock()
 }
 
+// WithBindingGuard checks a protected session at the instant a route is learned.
+// The guard must execute f synchronously and must not retain it.
+func WithBindingGuard(ctx context.Context, guard func(func()) bool) context.Context {
+	return context.WithValue(ctx, bindingGuardKey{}, guard)
+}
+
+type bindingGuardKey struct{}
+
 // RouteIPv4 implements server.IPv4Router.
-func (r *Router) RouteIPv4(_ context.Context, frame server.DataFrame, send server.PacketWriter) error {
+func (r *Router) RouteIPv4(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
 	source, _, err := packetAddresses(frame.IPv4)
 	if err != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.routes[source] = send
-	r.mu.Unlock()
+	bind := func() { r.mu.Lock(); r.routes[source] = send; r.mu.Unlock() }
+	if guard, ok := ctx.Value(bindingGuardKey{}).(func(func()) bool); ok {
+		if !guard(bind) {
+			return nil
+		}
+	} else {
+		bind()
+	}
 	r.writeMu.Lock()
 	_, err = r.device.Write(frame.IPv4)
 	r.writeMu.Unlock()

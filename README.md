@@ -129,6 +129,13 @@ username = "bob"
 password = "replace-me-too"
 ```
 
+IPsec ESP receive workers default to `clamp(GOMAXPROCS/3, 1, 4)` when
+`[ipsec].receive_workers` is omitted. This gives one worker on 1–5 CPUs, two
+on 6–8, three on 9–11, and four on 12 or more. Set `receive_workers` or
+`L2TP_IPSEC_RECEIVE_WORKERS` to choose an explicit value; the environment
+variable overrides TOML. Values 0 and 1 select serial processing, and values
+through 64 are accepted. Startup logs the effective count and its source.
+
 Server and pool-start settings accept either a full IPv4 address or a host
 offset within the subnet. For example, subnet `10.0.0.0/24`, server address
 `1`, pool start `100`, and pool size `50` produce server `10.0.0.1` and leases

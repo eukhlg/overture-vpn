@@ -24,8 +24,10 @@ type ESPBridgeResult struct {
 	association *ipsec.Association
 	logicalKey  netip.AddrPort
 	eligible    func() bool
-	Datagrams   []ipsec.ESPDatagram
-	L2TP        server.Result
+	// WithActive runs a short binding operation while excluding teardown.
+	WithActive func(func()) bool
+	Datagrams  []ipsec.ESPDatagram
+	L2TP       server.Result
 }
 type espFlow struct {
 	session     *ipsec.Association
@@ -35,8 +37,8 @@ type espFlow struct {
 }
 
 type ESPBridge struct {
-	// deliveryMu excludes protected control-plane teardown from callbacks. IPv4
-	// engine processing shares its read side, allowing crypto/PPP and TUN to overlap.
+	// deliveryMu protects protocol processing and short binding operations only.
+	// Application callbacks and device I/O must never hold it.
 	deliveryMu sync.RWMutex
 
 	// Sender is configured before serving. All ESP replies then share its FIFO.
@@ -110,6 +112,10 @@ func (b *ESPBridge) handle(peer net.Addr, wire []byte, now time.Time, borrowed b
 		}
 		return ESPBridgeResult{}, err
 	}
+	return b.handleDecrypted(session, peer, udp, next, now, borrowed)
+}
+
+func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, udp []byte, next uint8, now time.Time, borrowed bool) (ESPBridgeResult, error) {
 	ikeCookie := b.Registry.Cookie(session)
 	b.mu.RLock()
 	authenticatedActivity := b.authenticatedActivity
@@ -304,6 +310,16 @@ func (b *ESPBridge) handlePacket(ctx context.Context, peer net.Addr, wire []byte
 	return b.packetResult(result), nil
 }
 
+// HandleDecryptedPacket receives registry-authenticated plaintext. The caller
+// owns its storage through Dispatch; flow, PPP and reply handling stay here.
+func (b *ESPBridge) HandleDecryptedPacket(ctx context.Context, session *ipsec.Association, peer net.Addr, payload []byte, next uint8, now time.Time) (ipsec.ESPPacketResult, error) {
+	result, err := b.handleDecrypted(session, peer, payload, next, now, true)
+	if err != nil {
+		return ipsec.ESPPacketResult{}, err
+	}
+	return b.packetResult(result), nil
+}
+
 func (b *ESPBridge) resultEligibility(result server.Result) func() bool {
 	var tunnelID, sessionID uint16
 	if result.Opened != nil {
@@ -323,8 +339,6 @@ func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 			sessionEligible = b.resultEligibility(result.L2TP)
 		}
 		out.Dispatch = func(ctx context.Context) error {
-			b.deliveryMu.RLock()
-			defer b.deliveryMu.RUnlock()
 			b.mu.RLock()
 			flow, exists := b.flows[result.logicalKey]
 			eligible := exists && flow.session == result.association && result.association.Active()
@@ -334,6 +348,19 @@ func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 			// outboundMu and then b.mu. Never acquire outboundMu with b.mu held;
 			// recursive RLock can deadlock when a writer is waiting.
 			delivered := result
+			delivered.WithActive = func(f func()) bool {
+				b.deliveryMu.RLock()
+				defer b.deliveryMu.RUnlock()
+				b.mu.RLock()
+				flow, exists := b.flows[result.logicalKey]
+				active := exists && flow.session == result.association && result.association.Active()
+				b.mu.RUnlock()
+				if !active || !sessionEligible() {
+					return false
+				}
+				f()
+				return true
+			}
 			if !eligible {
 				delivered.L2TP.Opened = nil
 				delivered.L2TP.Data = nil

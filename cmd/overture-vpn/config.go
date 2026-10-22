@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +54,7 @@ type appConfig struct {
 		ServerID         string `toml:"server_id"`
 		MaxSAs           int    `toml:"max_sas"`
 		ForceNATT        bool   `toml:"force_natt"`
+		ReceiveWorkers   int    `toml:"receive_workers"`
 		ReplayWindowSize int    `toml:"replay_window_size"`
 		IKELifetime      string `toml:"ike_lifetime"`
 		ESPLifetime      string `toml:"esp_lifetime"`
@@ -66,6 +69,7 @@ type appConfig struct {
 		NewTunnelsPerSecond float64 `toml:"new_tunnels_per_second"`
 		NewTunnelBurst      int     `toml:"new_tunnel_burst"`
 	} `toml:"limits"`
+	receiveWorkersSource string
 }
 
 type networkConfig struct {
@@ -85,6 +89,8 @@ func defaultConfig() appConfig {
 	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
 	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
+	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	c.receiveWorkersSource = "automatic default"
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10
@@ -94,19 +100,40 @@ func defaultConfig() appConfig {
 func loadConfig(path string) (appConfig, error) {
 	c := defaultConfig()
 	if path != "" {
-		file, err := os.Open(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return c, fmt.Errorf("open config %q: %w", path, err)
 		}
-		defer file.Close()
-		if err := toml.NewDecoder(file).DisallowUnknownFields().Decode(&c); err != nil {
+		if err := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields().Decode(&c); err != nil {
 			return c, fmt.Errorf("decode config %q: %w", path, err)
+		}
+		var explicit struct {
+			IPsec struct {
+				ReceiveWorkers *int `toml:"receive_workers"`
+			} `toml:"ipsec"`
+		}
+		if err := toml.NewDecoder(bytes.NewReader(data)).Decode(&explicit); err != nil {
+			return c, fmt.Errorf("decode config %q: %w", path, err)
+		}
+		if explicit.IPsec.ReceiveWorkers != nil {
+			c.receiveWorkersSource = "config"
 		}
 	}
 	if err := applyEnvironment(&c); err != nil {
 		return c, err
 	}
 	return c, nil
+}
+
+func defaultReceiveWorkers(maxProcs int) int {
+	workers := maxProcs / 3
+	if workers < 1 {
+		return 1
+	}
+	if workers > 4 {
+		return 4
+	}
+	return workers
 }
 
 func applyEnvironment(c *appConfig) error {
@@ -170,6 +197,12 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideBool("L2TP_IPSEC_FORCE_NATT", &c.IPsec.ForceNATT); err != nil {
 		return err
 	}
+	if _, ok := lookupNonempty("L2TP_IPSEC_RECEIVE_WORKERS"); ok {
+		if err := overrideInt("L2TP_IPSEC_RECEIVE_WORKERS", &c.IPsec.ReceiveWorkers); err != nil {
+			return err
+		}
+		c.receiveWorkersSource = "environment"
+	}
 	if err := overrideInt("L2TP_IPSEC_REPLAY_WINDOW_SIZE", &c.IPsec.ReplayWindowSize); err != nil {
 		return err
 	}
@@ -219,6 +252,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.IPsec.MaxSAs < 0 || c.IPsec.MaxHalfOpen < 0 || c.IPsec.MaxSAsPerPeer < 0 {
 		return networkConfig{}, nil, fmt.Errorf("IPsec SA limits cannot be negative")
+	}
+	if c.IPsec.ReceiveWorkers < 0 || c.IPsec.ReceiveWorkers > ipsec.ESPReceiveCapacity {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.receive_workers must be between 0 and %d", ipsec.ESPReceiveCapacity)
 	}
 	if size := c.IPsec.ReplayWindowSize; size < esp.ReplayWindowSize || size > esp.MaxReplayWindowSize || size%64 != 0 {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.replay_window_size must be a multiple of 64 between %d and %d", esp.ReplayWindowSize, esp.MaxReplayWindowSize)
