@@ -39,6 +39,7 @@ type ESPSender struct {
 	packets        []encryptedPacket
 	messages       []udptransport.Message
 	indices        []int
+	udp            *udptransport.Conn
 }
 
 type datagramWriter interface {
@@ -50,11 +51,19 @@ func NewESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, b
 	if err != nil {
 		return nil, err
 	}
-	udp, err := udptransport.NewWithBatchSize(natt, size)
+	return NewESPSenderWithOptions(ctx, raw, natt, capacity, size, udptransport.Options{})
+}
+
+func NewESPSenderWithOptions(ctx context.Context, raw, natt net.PacketConn, capacity, size int, options udptransport.Options) (*ESPSender, error) {
+	udp, err := udptransport.NewWithOptions(natt, size, options)
 	if err != nil {
 		return nil, err
 	}
-	return newESPSender(ctx, raw, natt, capacity, udp, size)
+	s, err := newESPSender(ctx, raw, natt, capacity, udp, size)
+	if err == nil {
+		s.udp = udp
+	}
+	return s, err
 }
 
 func newESPSender(ctx context.Context, raw, natt net.PacketConn, capacity int, udp datagramWriter, batchSize ...int) (*ESPSender, error) {
@@ -246,3 +255,5 @@ func espBatchSize(sizes []int) (int, error) {
 	}
 	return size, udptransport.ValidateBatchSize(size)
 }
+
+func (s *ESPSender) GSOEnabled() bool { return s.udp != nil && s.udp.GSOEnabled() }

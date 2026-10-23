@@ -39,7 +39,11 @@ func New(conn net.PacketConn, batchSize ...int) (*Transport, error) {
 	if len(batchSize) == 1 {
 		size = batchSize[0]
 	}
-	udp, err := udptransport.NewWithBatchSize(conn, size)
+	return NewWithOptions(conn, size, udptransport.Options{})
+}
+
+func NewWithOptions(conn net.PacketConn, size int, options udptransport.Options) (*Transport, error) {
+	udp, err := udptransport.NewWithOptions(conn, size, options)
 	if err != nil {
 		return nil, err
 	}
@@ -122,3 +126,5 @@ func (t *Transport) Close() error {
 	}
 	return nil
 }
+
+func (t *Transport) GSOEnabled() bool { return t.receiver.GSOEnabled() }

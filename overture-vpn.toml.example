@@ -37,6 +37,8 @@ interface = ""
 receive_buffer = 0
 # Receive/send batch size, 1..256; L2TP_UDP_BATCH.
 udp_batch = 32
+# Linux UDP send segmentation; L2TP_UDP_GSO. Unsupported sockets fall back.
+udp_gso = true
 
 [ipsec]
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
@@ -46,9 +48,13 @@ udp_batch = 32
 # at kernel default, 4.39 ms at 256 KiB, and 11.94 ms at 1 MiB.
 # 256 KiB is the smallest tested positive request; use 0 for lower loaded delay.
 receive_buffer = 262144
-# NAT-T receive and ESP sender batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
+# NAT-T receive batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
 # 128 gained 3.3% geometric-mean throughput in the VPS matrix, using more RX storage.
 udp_batch = 128
+# ESP sender batch size, 1..256; L2TP_IPSEC_UDP_SEND_BATCH.
+udp_send_batch = 128
+# Linux UDP send segmentation; L2TP_IPSEC_UDP_GSO.
+udp_gso = true
 # Omit for an automatic count of clamp(GOMAXPROCS/3, 1, 4).
 # Set explicitly to override; 0 or 1 uses the serial receive path.
 # receive_workers = 2

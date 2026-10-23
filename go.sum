@@ -1,9 +1,9 @@
-github.com/eukhlg/ipsec-go v0.1.1-0.20261022153137-a1d7fa7d7249 h1:aYdyXqpoWz+txRwBmGe6oyLWUmLQksgauYqM+RFgaCc=
-github.com/eukhlg/ipsec-go v0.1.1-0.20261022153137-a1d7fa7d7249/go.mod h1:EcKCTGKWWyZ3FtigIqn7aIYn7yqiDUeLarGSuZ+0YRE=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261023144445-100ccb2de22d h1:tHALZap5kuh3z/w/8t1c3zbRZZYYfEpKNJziYTt/MgM=
+github.com/eukhlg/ipsec-go v0.1.1-0.20261023144445-100ccb2de22d/go.mod h1:/F1E2FzPi7RI+p4dbNxrwCl6YgVONtlvZLWUOH3Ae5I=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261022141323-b2956edc2fae h1:kTiOCzjpU2UP8Or+kBT25ENwkMRyplvLav0kmBzIHpA=
 github.com/eukhlg/l2tp-go v0.3.1-0.20261022141323-b2956edc2fae/go.mod h1:GQ3Sh9qv0ROdKdam/fEf161nS26ES+mtlOX49CAZ5CE=
-github.com/eukhlg/netio v0.0.0-20261022140448-ab1e241f0ce6 h1:ejD6VQEV4HVXKm/hcNmlezDdYNvKzr75vTqotfhGiyw=
-github.com/eukhlg/netio v0.0.0-20261022140448-ab1e241f0ce6/go.mod h1:MGjORjEdlvdxIA8y33aXnns03ltdmJhNXOGppoFCkEA=
+github.com/eukhlg/netio v0.0.0-20261023143205-8089b0aca545 h1:rNHm2060BT11ET75mS30BJhpq6enz6UYXU0AcdtN73c=
+github.com/eukhlg/netio v0.0.0-20261023143205-8089b0aca545/go.mod h1:MGjORjEdlvdxIA8y33aXnns03ltdmJhNXOGppoFCkEA=
 github.com/pelletier/go-toml/v2 v2.4.2 h1:M2fKKbmyvI+hGId/D0W64qDBMVhJnNR10O5gIbMc//Q=
 github.com/pelletier/go-toml/v2 v2.4.2/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 golang.org/x/net v0.47.0 h1:Mx+4dIFzqraBXUugkia1OOvlD6LemFo1ALMHjrXDOhY=

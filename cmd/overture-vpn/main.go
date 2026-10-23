@@ -105,11 +105,12 @@ func main() {
 		_ = conn.Close()
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.New(conn, resolved.L2TP.UDPBatch) // owns conn from here on
+	plain, err := plainl2tp.NewWithOptions(conn, resolved.L2TP.UDPBatch, udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
 	if err != nil {
 		conn.Close()
 		log.Fatal(err)
 	}
+	log.Printf("plain L2TP UDP GSO active=%t requested=%t", plain.GSOEnabled(), resolved.L2TP.UDPGSO)
 	s, err := server.New(plain, serverConfig)
 	if err != nil {
 		plain.Close()

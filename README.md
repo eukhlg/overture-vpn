@@ -143,13 +143,22 @@ are accepted. Positive values set `SO_RCVBUF`, then on Linux attempt
 `SO_RCVBUFFORCE` with `CAP_NET_ADMIN`. Startup logs the requested and effective
 bytes and `forced`; Linux reports twice the request. A cap warning suggests
 granting `CAP_NET_ADMIN` or raising `net.core.rmem_max`. Send buffers are unchanged.
-`[ipsec].udp_batch` (`L2TP_IPSEC_UDP_BATCH`) sets NAT-T receive and ESP sender
-batches from 1 to 256, default 128. Metadata is allocated once at startup.
+`[ipsec].udp_batch` (`L2TP_IPSEC_UDP_BATCH`) sets NAT-T receive
+batches from 1 to 256, default 128. `[ipsec].udp_send_batch`
+(`L2TP_IPSEC_UDP_SEND_BATCH`) independently sets the ESP sender batch, default 128.
+Metadata is allocated once at startup.
+
+`[ipsec].udp_gso` (`L2TP_IPSEC_UDP_GSO`, default true) enables Linux UDP
+send segmentation for NAT-T. Unsupported sockets use ordinary batched sends;
+a segmentation error disables GSO for that connection and retries unsent packets.
+GRO remains disabled: the VPS comparison showed no gain beyond the trial spread.
+Startup logs the active GSO/GRO state.
 
 The plain UDP/1701 listener has independent `[l2tp].receive_buffer`
 (`L2TP_RECEIVE_BUFFER`) and `[l2tp].udp_batch` (`L2TP_UDP_BATCH`) settings,
 with defaults 0 (kernel receive buffer) and 32. The same size limits and
-startup logging apply. These options also affect UDP/1701 when IPsec is enabled.
+startup logging apply. `[l2tp].udp_gso` (`L2TP_UDP_GSO`, default true) controls
+send segmentation for reverse ACKs and download on this listener. These options also affect UDP/1701 when IPsec is enabled.
 
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,

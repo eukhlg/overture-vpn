@@ -47,13 +47,16 @@ type appConfig struct {
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
 	L2TP struct {
-		ReceiveBuffer int `toml:"receive_buffer"`
-		UDPBatch      int `toml:"udp_batch"`
+		ReceiveBuffer int  `toml:"receive_buffer"`
+		UDPBatch      int  `toml:"udp_batch"`
+		UDPGSO        bool `toml:"udp_gso"`
 	} `toml:"l2tp"`
 	IPsec struct {
 		Enabled          bool   `toml:"enabled"`
 		ReceiveBuffer    int    `toml:"receive_buffer"`
 		UDPBatch         int    `toml:"udp_batch"`
+		UDPGSO           bool   `toml:"udp_gso"`
+		UDPSendBatch     int    `toml:"udp_send_batch"`
 		IKEListen        string `toml:"ike_listen"`
 		NATTListen       string `toml:"natt_listen"`
 		ESPListen        string `toml:"esp_listen"`
@@ -98,7 +101,10 @@ func defaultConfig() appConfig {
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
+	c.L2TP.UDPGSO = true
 	c.L2TP.UDPBatch = udptransport.DefaultBatchSize
+	c.IPsec.UDPGSO = true
+	c.IPsec.UDPSendBatch = 128
 	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 256*1024, 128
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
@@ -146,6 +152,9 @@ func defaultReceiveWorkers(maxProcs int) int {
 }
 
 func applyEnvironment(c *appConfig) error {
+	if err := overrideBool("L2TP_UDP_GSO", &c.L2TP.UDPGSO); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_RECEIVE_BUFFER", &c.L2TP.ReceiveBuffer); err != nil {
 		return err
 	}
@@ -207,6 +216,12 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideInt("L2TP_IPSEC_UDP_BATCH", &c.IPsec.UDPBatch); err != nil {
 		return err
 	}
+	if err := overrideBool("L2TP_IPSEC_UDP_GSO", &c.IPsec.UDPGSO); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_IPSEC_UDP_SEND_BATCH", &c.IPsec.UDPSendBatch); err != nil {
+		return err
+	}
 	overrideString("L2TP_IPSEC_IKE_LISTEN", &c.IPsec.IKEListen)
 	overrideString("L2TP_IPSEC_NATT_LISTEN", &c.IPsec.NATTListen)
 	overrideString("L2TP_IPSEC_ESP_LISTEN", &c.IPsec.ESPListen)
@@ -254,6 +269,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if err := udptransport.ValidateBatchSize(c.L2TP.UDPBatch); err != nil {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.udp_batch: %w", err)
+	}
+	if err := udptransport.ValidateBatchSize(c.IPsec.UDPSendBatch); err != nil {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.udp_send_batch: %w", err)
 	}
 	if c.IPsec.ReceiveBuffer < 0 || int64(c.IPsec.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.receive_buffer must be between 0 and 1073741823 bytes")
