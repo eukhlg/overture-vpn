@@ -157,7 +157,8 @@ Startup logs the active GSO/GRO state.
 The plain UDP/1701 listener has independent `[l2tp].receive_buffer`
 (`L2TP_RECEIVE_BUFFER`) and `[l2tp].udp_batch` (`L2TP_UDP_BATCH`) settings,
 with defaults 0 (kernel receive buffer) and 32. The same size limits and
-startup logging apply. These options also affect UDP/1701 when IPsec is enabled.
+startup logging apply. `[l2tp].udp_gso` (`L2TP_UDP_GSO`, default true) controls
+send segmentation for reverse ACKs and download on this listener. These options also affect UDP/1701 when IPsec is enabled.
 
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,

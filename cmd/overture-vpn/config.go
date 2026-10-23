@@ -47,8 +47,9 @@ type appConfig struct {
 		Interface string `toml:"interface"`
 	} `toml:"nat"`
 	L2TP struct {
-		ReceiveBuffer int `toml:"receive_buffer"`
-		UDPBatch      int `toml:"udp_batch"`
+		ReceiveBuffer int  `toml:"receive_buffer"`
+		UDPBatch      int  `toml:"udp_batch"`
+		UDPGSO        bool `toml:"udp_gso"`
 	} `toml:"l2tp"`
 	IPsec struct {
 		Enabled          bool   `toml:"enabled"`
@@ -100,6 +101,7 @@ func defaultConfig() appConfig {
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
+	c.L2TP.UDPGSO = true
 	c.L2TP.UDPBatch = udptransport.DefaultBatchSize
 	c.IPsec.UDPGSO = true
 	c.IPsec.UDPSendBatch = 128
@@ -150,6 +152,9 @@ func defaultReceiveWorkers(maxProcs int) int {
 }
 
 func applyEnvironment(c *appConfig) error {
+	if err := overrideBool("L2TP_UDP_GSO", &c.L2TP.UDPGSO); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_RECEIVE_BUFFER", &c.L2TP.ReceiveBuffer); err != nil {
 		return err
 	}
