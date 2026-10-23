@@ -1,8 +1,0 @@
-fuzz: elapsed: 0s, gathering baseline coverage: 0/4 completed
-fuzz: elapsed: 0s, gathering baseline coverage: 4/4 completed, now fuzzing with 2 workers
-fuzz: elapsed: 3s, execs: 283817 (94540/sec), new interesting: 3 (total: 7)
-fuzz: elapsed: 6s, execs: 573781 (96657/sec), new interesting: 3 (total: 7)
-fuzz: elapsed: 9s, execs: 866990 (97736/sec), new interesting: 3 (total: 7)
-fuzz: elapsed: 10s, execs: 964579 (94701/sec), new interesting: 3 (total: 7)
-PASS
-ok  	github.com/eukhlg/l2tp-go/protocol/ppp	10.632s

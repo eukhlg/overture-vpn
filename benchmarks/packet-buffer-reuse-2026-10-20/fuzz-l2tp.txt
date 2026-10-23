@@ -1,8 +1,0 @@
-fuzz: elapsed: 0s, gathering baseline coverage: 0/4 completed
-fuzz: elapsed: 0s, gathering baseline coverage: 4/4 completed, now fuzzing with 2 workers
-fuzz: elapsed: 3s, execs: 322989 (107657/sec), new interesting: 10 (total: 14)
-fuzz: elapsed: 6s, execs: 653380 (110092/sec), new interesting: 10 (total: 14)
-fuzz: elapsed: 9s, execs: 981568 (109366/sec), new interesting: 10 (total: 14)
-fuzz: elapsed: 10s, execs: 1095275 (106868/sec), new interesting: 10 (total: 14)
-PASS
-ok  	github.com/eukhlg/l2tp-go/protocol/l2tp	15.843s
