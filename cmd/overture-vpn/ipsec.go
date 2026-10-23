@@ -142,7 +142,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	sender, err := l2tpipsec.NewESPSender(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity, config.IPsec.UDPBatch)
+	sender, err := l2tpipsec.NewESPSenderWithOptions(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity, config.IPsec.UDPSendBatch, udptransport.Options{DisableGSO: !config.IPsec.UDPGSO})
 	if err != nil {
 		cancel()
 		_ = raw.Close()
@@ -150,6 +150,8 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		_ = ike.Close()
 		return nil, err
 	}
+	log.Printf("NAT-T UDP GSO active=%t requested=%t send_batch=%d", sender.GSOEnabled(), config.IPsec.UDPGSO, config.IPsec.UDPSendBatch)
+	log.Print("NAT-T UDP GRO active=false")
 	bridge.Sender = sender
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)

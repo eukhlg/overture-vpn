@@ -11,7 +11,7 @@ import (
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
+		"L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
@@ -331,5 +331,24 @@ func TestL2TPSocketConfig(t *testing.T) {
 				t.Fatalf("%s=%d valid=%v err=%v", key, value, valid, err)
 			}
 		}
+	}
+}
+
+func TestIPsecUDPOffloadConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c := defaultConfig()
+	if !c.IPsec.UDPGSO || c.IPsec.UDPSendBatch != 128 {
+		t.Fatalf("defaults: %+v", c.IPsec)
+	}
+	path := writeConfig(t, "[ipsec]\nudp_gso=false\nudp_send_batch=128\n")
+	c, err := loadConfig(path)
+	if err != nil || c.IPsec.UDPGSO || c.IPsec.UDPSendBatch != 128 {
+		t.Fatalf("file: %v %+v", err, c.IPsec)
+	}
+	t.Setenv("L2TP_IPSEC_UDP_GSO", "true")
+	t.Setenv("L2TP_IPSEC_UDP_SEND_BATCH", "32")
+	c, err = loadConfig(path)
+	if err != nil || !c.IPsec.UDPGSO || c.IPsec.UDPSendBatch != 32 {
+		t.Fatalf("env: %v %+v", err, c.IPsec)
 	}
 }
