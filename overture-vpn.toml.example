@@ -36,9 +36,9 @@ interface = ""
 [l2tp]
 # Plain UDP/1701 receive buffer in bytes; L2TP_RECEIVE_BUFFER. 0 keeps the
 # kernel default. Larger buffers can add queueing delay under saturation.
-receive_buffer = 0
+receive_buffer = 1048576
 # Receive/send batch size, 1..256; L2TP_UDP_BATCH.
-udp_batch = 32
+udp_batch = 128
 # Linux UDP send segmentation; L2TP_UDP_GSO. Unsupported sockets fall back.
 udp_gso = true
 

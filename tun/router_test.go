@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
@@ -329,5 +330,260 @@ func TestOwnedBatchScrubsOffloadGrowthWithoutDirtyingSlots(t *testing.T) {
 	}
 	for _, b := range buffers {
 		b.Release()
+	}
+}
+
+func TestOwnedBatchRejectsClosedReboundForgottenOrCancelledPackets(t *testing.T) {
+	for _, change := range []string{"close", "rebind", "owned-rebind", "forget", "cancel"} {
+		t.Run(change, func(t *testing.T) {
+			d := newMemoryDevice()
+			r, _ := NewRouter(d)
+			address := netip.MustParseAddr("10.0.0.2")
+			var mu sync.Mutex
+			active := true
+			checks := 0
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx, flush := r.NewRouteBatch(WithBindingGuard(parent, func(f func()) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				checks++
+				if !active {
+					return false
+				}
+				f()
+				return true
+			}))
+			p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+			storage := make([]byte, 16+len(p))
+			copy(storage[16:], p)
+			staleCalled, replacementCalled := false, false
+			if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { staleCalled = true; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if checks == 0 {
+				t.Fatal("no eligibility check before enqueue")
+			}
+			if len(r.routes) != 0 {
+				t.Fatal("route published before delivery")
+			}
+			switch change {
+			case "close":
+				mu.Lock()
+				active = false
+				mu.Unlock()
+			case "rebind":
+				r.Bind(address, func([]byte) error { replacementCalled = true; return nil })
+			case "owned-rebind":
+				r.BindOwned(address, func(b *packetbuf.Buffer) error { replacementCalled = true; b.Release(); return nil })
+			case "forget":
+				r.Forget(address)
+			case "cancel":
+				cancel()
+			}
+			if err := flush(); err != nil {
+				t.Fatal(err)
+			}
+			if len(d.written) != 0 {
+				t.Fatal("stale packet written")
+			}
+			if change == "rebind" {
+				if err := r.routes[address](p); err != nil {
+					t.Fatal(err)
+				}
+				if !replacementCalled {
+					t.Fatal("replacement route overwritten")
+				}
+			}
+			if change == "owned-rebind" {
+				b, _ := packetbuf.Copy(p)
+				if err := r.ownedRoutes[address](b); err != nil {
+					t.Fatal(err)
+				}
+				if !replacementCalled {
+					t.Fatal("owned replacement overwritten")
+				}
+			}
+			if change != "rebind" && len(r.routes) != 0 {
+				t.Fatal("stale packet learned a route")
+			}
+			if staleCalled {
+				t.Fatal("stale route invoked")
+			}
+			if err := flush(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type blockedWriteDevice struct {
+	*memoryDevice
+	entered   chan struct{}
+	release   chan struct{}
+	onceWrite sync.Once
+}
+
+func (d *blockedWriteDevice) Write(bufs [][]byte, offset int) (int, error) {
+	d.onceWrite.Do(func() { close(d.entered); <-d.release })
+	return d.memoryDevice.Write(bufs, offset)
+}
+
+func TestSessionCloseDuringBlockedFlushDoesNotBlockProcessingOrReviveRoute(t *testing.T) {
+	for _, rebind := range []bool{false, true} {
+		t.Run(map[bool]string{false: "close", true: "rebind"}[rebind], func(t *testing.T) {
+			d := &blockedWriteDevice{memoryDevice: newMemoryDevice(), entered: make(chan struct{}), release: make(chan struct{})}
+			r, _ := NewRouter(d)
+			address := netip.MustParseAddr("10.0.0.2")
+			var mu sync.Mutex
+			active := true
+			base := WithBindingGuard(context.Background(), func(f func()) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				if !active {
+					return false
+				}
+				f()
+				return true
+			})
+			queue := func() func() error {
+				ctx, flush := r.NewRouteBatch(base)
+				p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+				storage := make([]byte, 16+len(p))
+				copy(storage[16:], p)
+				if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { t.Error("stale route"); return nil }); err != nil {
+					t.Error(err)
+				}
+				return flush
+			}
+			first := queue()
+			doneFirst := make(chan error, 1)
+			go func() { doneFirst <- first() }()
+			<-d.entered
+			// Processing another batch must progress while the device write is blocked.
+			processed := make(chan func() error, 1)
+			go func() { processed <- queue() }()
+			var second func() error
+			select {
+			case second = <-processed:
+			case <-time.After(time.Second):
+				close(d.release)
+				t.Fatal("processing waited on TUN write")
+			}
+			mu.Lock()
+			active = false
+			mu.Unlock()
+			r.Forget(address)
+			replacement := false
+			if rebind {
+				r.Bind(address, func([]byte) error { replacement = true; return nil })
+			}
+			doneSecond := make(chan error, 1)
+			go func() { doneSecond <- second() }()
+			close(d.release)
+			if err := <-doneFirst; err != nil {
+				t.Fatal(err)
+			}
+			if err := <-doneSecond; err != nil {
+				t.Fatal(err)
+			}
+			if len(d.written) != 1 {
+				t.Fatalf("queued stale packet written: %d", len(d.written))
+			}
+			if rebind {
+				_ = r.routes[address](nil)
+				if !replacement {
+					t.Fatal("new binding overwritten")
+				}
+			} else if len(r.routes) != 0 {
+				t.Fatal("closed route revived")
+			}
+		})
+	}
+}
+
+func TestBindingGuardsComposeAndRejectBeforeQueue(t *testing.T) {
+	d := newMemoryDevice()
+	r, _ := NewRouter(d)
+	for _, which := range []int{0, 1} {
+		guard := func(n int) func(func()) bool {
+			return func(f func()) bool {
+				if n == which {
+					return false
+				}
+				f()
+				return true
+			}
+		}
+		ctx, flush := r.NewRouteBatch(WithBindingGuard(WithBindingGuard(context.Background(), guard(0)), guard(1)))
+		p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: p}, p, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(r.routes) != 0 || len(r.bindings) != 0 || len(d.written) != 0 {
+		t.Fatal("rejected guard published state")
+	}
+}
+
+// Steady-state owned routing must not allocate per packet, and flush must
+// publish a session's route once per binding generation.
+// countingDevice records writes without copying packets.
+type countingDevice struct {
+	*memoryDevice
+	writes int
+}
+
+func (d *countingDevice) Write(bufs [][]byte, _ int) (int, error) {
+	d.writes += len(bufs)
+	return len(bufs), nil
+}
+
+func TestOwnedRoutingSteadyStateAllocatesNothing(t *testing.T) {
+	d := &countingDevice{memoryDevice: newMemoryDevice()}
+	r, _ := NewRouter(d)
+	r.Bind(netip.MustParseAddr("10.0.0.2"), func([]byte) error { return nil })
+	ctx, flush := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	storage := make([]byte, 16+len(p))
+	copy(storage[16:], p)
+	send := server.PacketWriter(func([]byte) error { return nil })
+	frame := server.DataFrame{IPv4: storage[16:]}
+	route := func() {
+		if err := r.RouteIPv4Owned(ctx, frame, storage, 16, send); err != nil {
+			t.Fatal(err)
+		}
+		if err := flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route()
+	if allocs := testing.AllocsPerRun(100, route); allocs > 0.01 {
+		t.Fatalf("owned route and flush allocate %v per packet", allocs)
+	}
+	if d.writes != 102 {
+		t.Fatalf("writes=%d", d.writes)
+	}
+}
+
+func TestBindingGuardSlot(t *testing.T) {
+	ctx := WithBindingGuardSlot(context.Background())
+	calls := 0
+	guard := func(f func()) bool { calls++; f(); return true }
+	if !SetBindingGuard(ctx, guard) || bindingGuard(ctx) == nil {
+		t.Fatal("slot guard not set")
+	}
+	if allocs := testing.AllocsPerRun(100, func() { SetBindingGuard(ctx, guard) }); allocs != 0 {
+		t.Fatalf("SetBindingGuard allocates %v", allocs)
+	}
+	SetBindingGuard(ctx, nil)
+	if bindingGuard(ctx) != nil {
+		t.Fatal("cleared slot still guards")
+	}
+	if SetBindingGuard(context.Background(), guard) {
+		t.Fatal("set without slot reported success")
 	}
 }

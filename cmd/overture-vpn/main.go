@@ -118,6 +118,8 @@ func main() {
 	}
 	// Callbacks get borrowed views of plain's pooled receive buffers (see server.BorrowedReceive).
 	s.BorrowedReceive = true
+	s.ReceivePipeline = resolved.L2TP.Pipeline
+	log.Printf("plain L2TP receive pipeline=%t", s.ReceivePipeline)
 	defer s.Close()
 	var router *tun.Router
 	var cleanup func(context.Context) error
@@ -136,6 +138,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		// Plain packets need no per-packet session guard: the Engine accepted
+		// each one for an established session in this same processing goroutine,
+		// and session close or rebind (Forget, Bind) changes the address binding
+		// generation that flush rechecks before writing or publishing a route.
 		s.RouteIPv4 = router.RouteIPv4
 		s.RouteIPv4Owned = router.RouteIPv4Owned
 		// Room before each plain datagram for the TUN virtio header (10 bytes).

@@ -11,7 +11,7 @@ import (
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"L2TP_UDP_GSO", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
+		"L2TP_PIPELINE", "L2TP_UDP_GSO", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
@@ -294,12 +294,12 @@ func TestIPsecSocketConfig(t *testing.T) {
 func TestL2TPSocketConfig(t *testing.T) {
 	clearConfigEnvironment(t)
 	c, err := loadConfig("")
-	if err != nil || c.L2TP.ReceiveBuffer != 0 || c.L2TP.UDPBatch != 32 {
+	if err != nil || c.L2TP.ReceiveBuffer != 1048576 || c.L2TP.UDPBatch != 128 {
 		t.Fatalf("defaults: %+v %v", c.L2TP, err)
 	}
-	path := writeConfig(t, "[l2tp]\nreceive_buffer=1048576\nudp_batch=128\n")
+	path := writeConfig(t, "[l2tp]\nreceive_buffer=0\nudp_batch=32\n")
 	c, err = loadConfig(path)
-	if err != nil || c.L2TP.ReceiveBuffer != 1048576 || c.L2TP.UDPBatch != 128 {
+	if err != nil || c.L2TP.ReceiveBuffer != 0 || c.L2TP.UDPBatch != 32 {
 		t.Fatalf("config: %+v %v", c.L2TP, err)
 	}
 	t.Setenv("L2TP_RECEIVE_BUFFER", "262144")
@@ -383,5 +383,32 @@ func TestTUNBackendAndOffloadEnvironment(t *testing.T) {
 	c.TUN.Backend = "unknown"
 	if _, _, err := c.validate(); err == nil {
 		t.Fatal("invalid backend accepted")
+	}
+}
+
+func TestPlainPipelineConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || !c.L2TP.Pipeline {
+		t.Fatalf("default: %v %v", c.L2TP.Pipeline, err)
+	}
+	path := writeConfig(t, "[l2tp]\npipeline = false\n")
+	c, err = loadConfig(path)
+	if err != nil || c.L2TP.Pipeline {
+		t.Fatalf("config: %v %v", c.L2TP.Pipeline, err)
+	}
+	t.Setenv("L2TP_PIPELINE", "true")
+	c, err = loadConfig(path)
+	if err != nil || !c.L2TP.Pipeline {
+		t.Fatalf("env: %v %v", c.L2TP.Pipeline, err)
+	}
+	t.Setenv("L2TP_PIPELINE", "false")
+	c, err = loadConfig("")
+	if err != nil || c.L2TP.Pipeline {
+		t.Fatalf("env disable: %v %v", c.L2TP.Pipeline, err)
+	}
+	t.Setenv("L2TP_PIPELINE", "invalid")
+	if _, err = loadConfig(""); err == nil || !strings.Contains(err.Error(), "L2TP_PIPELINE") {
+		t.Fatal(err)
 	}
 }
