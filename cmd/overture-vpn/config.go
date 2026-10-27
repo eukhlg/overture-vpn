@@ -114,10 +114,10 @@ func defaultConfig() appConfig {
 	c.L2TP.ReceiveBuffer, c.L2TP.UDPBatch = 1024*1024, 128
 	c.IPsec.UDPGSO = true
 	c.IPsec.UDPSendBatch = 128
-	// Measured in download-path-2026-10-27: after the faster receive path,
-	// 1 MiB (2 MiB effective) removes NAT-T upload drops at P1 and gains
-	// 6% (P1) / 18% (P4) over 256 KiB.
-	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 1024*1024, 128
+	// Measured in download-queue-2026-10-27: 512 KiB (1 MiB effective) gains
+	// 5.3% (P1) / 13.9% (P4) NAT-T upload over 256 KiB, 76-84% of the 1 MiB
+	// gain, at 3.9 instead of 6.8 ms loaded upload ping p50 (P4).
+	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 512*1024, 128
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10

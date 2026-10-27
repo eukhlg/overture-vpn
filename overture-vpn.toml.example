@@ -26,7 +26,7 @@ mtu = 1400
 backend = "system" # L2TP_TUN_BACKEND
 offload = true # L2TP_TUN_OFFLOAD; Linux VNET_HDR, with runtime fallback
 # Linux TUN transmit ring (txqueuelen); L2TP_TUN_TX_QUEUE_LENGTH, 0..65535.
-# 0 = automatic: 64 with offload active, kernel setting otherwise. Shorter
+# 0 = automatic: 32 with offload active, kernel setting otherwise. Shorter
 # rings bound download queueing delay; offload makes each entry up to 64 KB.
 tx_queue_length = 0
 enabled = true
@@ -50,10 +50,10 @@ udp_gso = true
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
 # L2TP_IPSEC_RECEIVE_BUFFER overrides this value. Linux reports 2x the request.
 # Larger buffers reduce drops and can improve throughput, at the cost of more
-# queueing delay under saturation. VPS, batch 128, 256 KiB -> 1 MiB: upload
-# +6% (1 stream) / +18% (4 streams); loaded upload ping p50 at 4 streams
-# 2.3 -> 6.8 ms. Use 262144 or 0 when lower loaded delay matters more.
-receive_buffer = 1048576
+# queueing delay under saturation. VPS, batch 128, upload over 256 KiB:
+# 512 KiB +5% (1 stream) / +14% (4 streams), 1 MiB +7% / +17%; loaded upload
+# ping p50 at 4 streams 2.3 / 3.9 / 6.8 ms. Use 0 for the lowest delay.
+receive_buffer = 524288
 # NAT-T receive batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
 # 128 gained 3.3% geometric-mean throughput in the VPS matrix, using more RX storage.
 udp_batch = 128

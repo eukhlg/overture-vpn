@@ -137,8 +137,8 @@ variable overrides TOML. Values 0 and 1 select serial processing, and values
 through 64 are accepted. Startup logs the effective count and its source.
 
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
-buffer in bytes for each NAT-T and raw ESP listener. The default is 1048576
-(1 MiB; Linux reports 2 MiB effective); set `0` to keep the kernel setting. Values through 1073741823 bytes
+buffer in bytes for each NAT-T and raw ESP listener. The default is 524288
+(512 KiB; Linux reports 1 MiB effective); set `0` to keep the kernel setting. Values through 1073741823 bytes
 are accepted. Positive values set `SO_RCVBUF`, then on Linux attempt
 `SO_RCVBUFFORCE` with `CAP_NET_ADMIN`. Startup logs the requested and effective
 bytes and `forced`; Linux reports twice the request. A cap warning suggests
@@ -173,12 +173,12 @@ send segmentation for reverse ACKs and download on this listener. These options 
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,
 a 256 KiB request improved mean one-stream NAT-T upload from 592 to 791 Mbit/s,
-while loaded p95 rose from 2.48 to 4.39 ms. With the faster receive path of
-`download-path-2026-10-27`, 1 MiB instead of 256 KiB raised NAT-T upload from
-1147 to 1213 Mbit/s (one stream, drops 621 to 0) and from 977 to 1157 Mbit/s
-(four streams, drops 14,471 to 2,344); loaded upload ping p50 stayed at 0.6 ms
-with one stream and rose from 2.3 to 6.8 ms with four. Choose 262144 or `0`
-when lower loaded delay matters more. Batch 128 gained 3.3% in
+while loaded p95 rose from 2.48 to 4.39 ms. With the faster receive path, the
+`download-queue-2026-10-27` run compared 256 KiB / 512 KiB / 1 MiB: NAT-T
+upload 1145 / 1205 / 1224 Mbit/s with one stream and 990 / 1128 / 1154 Mbit/s
+with four (drops 14,604 / 6,541 / 2,722), loaded upload ping p50 with four
+streams 2.3 / 3.9 / 6.8 ms. The 512 KiB default keeps most of the gain at about
+half the added delay; choose 1048576 for throughput or `0` for the lowest delay. Batch 128 gained 3.3% in
 geometric mean across the matrix; it retains more receive storage than 32.
 These are short same-host VPS results, not a universal capacity guarantee.
 
@@ -305,14 +305,15 @@ clean shutdown.
 
 `[tun].tx_queue_length` (`L2TP_TUN_TX_QUEUE_LENGTH`, Linux) sets the
 interface transmit queue, which the TUN driver uses as its ring of packets
-waiting for the server to read. `0` (default) selects 64 when offload is
+waiting for the server to read. `0` (default) selects 32 when offload is
 active and keeps the kernel setting (usually 500) otherwise. With offload each
 entry can hold a 64 KB super-packet, and the driver drops at a full ring rather
 than pushing back into the qdisc, so a long ring holds TCP's excess window as
-download delay that no qdisc can manage. In the `download-path-2026-10-27` VPS
-run, 64 entries cut loaded download ping p50 from 9.6 to 5.2 ms (one stream)
-and from 37.8 to 4.0 ms (four streams) at unchanged throughput. Startup logs
-the effective length.
+download delay that no qdisc can manage. In the `download-queue-2026-10-27` VPS
+sweep, 32 entries cut loaded download ping p50 from 10.2 to 2.0 ms (one stream)
+and from 37.6 to 1.6 ms (four streams) for plain L2TP, and from 20.6 / 67.8 to
+3.7 / 2.6 ms for NAT-T, at 0-6% less download throughput; 16 entries begin to
+drop upload-direction ACKs. Startup logs the effective length.
 
 Native execution does not modify host IP forwarding or NAT. Configure those
 with the host firewall/router policy appropriate for the machine. The Docker

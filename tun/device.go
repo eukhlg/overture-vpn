@@ -13,9 +13,11 @@ var ErrUnsupported = errors.New("tun: unsupported operating system")
 // download-path-2026-10-27), so the kernel default of 500 lets TCP park
 // megabytes of window there: download ping 9.6 ms (P1) / 37.8 ms (P4).
 // The TUN driver drops at a full ring instead of pushing back into the
-// qdisc, so a qdisc cannot bound this queue; 64 entries gave 5.2 / 4.0 ms at
-// unchanged throughput.
-const DefaultOffloadTxQueueLength = 64
+// qdisc, so a qdisc cannot bound this queue. In the download-queue-2026-10-27
+// sweep (16/32/64/128/500), 32 was the knee: download ping p50 2.0 / 1.6 ms
+// plain and 3.7 / 2.6 ms NAT-T (500: 10.2 / 37.6 and 20.6 / 67.8 ms) for
+// 0-6% less download throughput; 16 starts dropping upload-direction ACKs.
+const DefaultOffloadTxQueueLength = 32
 
 type Config struct {
 	MTU            int
