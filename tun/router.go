@@ -30,6 +30,9 @@ type Router struct {
 	routes      map[netip.Addr]SendIPv4
 	ownedRoutes map[netip.Addr]func(*packetbuf.Buffer) error
 	bindings    map[netip.Addr]uint64
+	// published records the binding generation whose route is in routes, so
+	// flush writes the route map only when a session's route actually changes.
+	published   map[netip.Addr]uint64
 	nextBinding uint64
 }
 
@@ -37,7 +40,7 @@ func NewRouter(device Device) (*Router, error) {
 	if device == nil {
 		return nil, errors.New("tun: device is required")
 	}
-	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64)}, nil
+	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64), published: make(map[netip.Addr]uint64)}, nil
 }
 
 func (r *Router) Bind(address netip.Addr, send SendIPv4) {
@@ -45,6 +48,7 @@ func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 	r.nextBinding++
 	r.bindings[address] = r.nextBinding
 	r.routes[address] = send
+	r.published[address] = r.nextBinding
 	delete(r.ownedRoutes, address)
 	r.mu.Unlock()
 }
@@ -75,16 +79,51 @@ func WithBindingGuard(ctx context.Context, guard func(func()) bool) context.Cont
 }
 
 type bindingGuardKey struct{}
+type bindingGuardSlotKey struct{}
+
+// bindingGuardSlot carries the current packet's guard through a context created
+// once per delivery goroutine, so per-packet dispatch allocates no context.
+type bindingGuardSlot struct{ guard func(func()) bool }
+
+// WithBindingGuardSlot returns a context whose guard is set per packet with
+// SetBindingGuard. A guard set there takes precedence over WithBindingGuard.
+func WithBindingGuardSlot(ctx context.Context) context.Context {
+	return context.WithValue(ctx, bindingGuardSlotKey{}, &bindingGuardSlot{})
+}
+
+// SetBindingGuard sets (or, with nil, clears) the current packet's guard in a
+// context from WithBindingGuardSlot. It reports false if ctx has no slot.
+func SetBindingGuard(ctx context.Context, guard func(func()) bool) bool {
+	slot, ok := ctx.Value(bindingGuardSlotKey{}).(*bindingGuardSlot)
+	if ok {
+		slot.guard = guard
+	}
+	return ok
+}
+
+func bindingGuard(ctx context.Context) func(func()) bool {
+	if slot, ok := ctx.Value(bindingGuardSlotKey{}).(*bindingGuardSlot); ok && slot.guard != nil {
+		return slot.guard
+	}
+	guard, _ := ctx.Value(bindingGuardKey{}).(func(func()) bool)
+	return guard
+}
+
+// noop is the guarded operation for eligibility-only checks; a package-level
+// func value, so checking a guard allocates nothing.
+func noop() {}
 
 // RouteIPv4 implements server.IPv4Router.
 func (r *Router) RouteIPv4(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
-	accept, err := r.prepare(ctx, frame, send)
-	if err != nil || accept == nil {
+	p, ok, err := r.prepare(ctx, frame, send)
+	if err != nil || !ok {
 		return err
 	}
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
-	if !accept() {
+	packets, accepted := [1]routePacket{p}, [1]bool{p.guard == nil || p.guard(noop)}
+	r.admit(packets[:], accepted[:])
+	if !accepted[0] {
 		return nil
 	}
 	_, err = r.device.Write([][]byte{frame.IPv4}, 0)
@@ -206,6 +245,7 @@ func (r *Router) Forget(address netip.Addr) {
 	delete(r.routes, address)
 	delete(r.ownedRoutes, address)
 	delete(r.bindings, address)
+	delete(r.published, address)
 	r.mu.Unlock()
 }
 
@@ -221,72 +261,82 @@ func packetAddresses(packet []byte) (netip.Addr, netip.Addr, error) {
 	return netip.AddrFrom4([4]byte(packet[12:16])), netip.AddrFrom4([4]byte(packet[16:20])), nil
 }
 
-// prepare captures both session eligibility and the address binding generation.
-// Publication is deferred to flush for owned packets, so a queued packet cannot
-// resurrect a forgotten route or overwrite a newer client's binding.
-func (r *Router) prepare(ctx context.Context, frame server.DataFrame, send server.PacketWriter) (func() bool, error) {
+// prepare checks session eligibility and captures the address binding
+// generation. Publication is deferred to flush for owned packets, so a queued
+// packet cannot resurrect a forgotten route or overwrite a newer client's
+// binding. No closures are created: the packet carries plain values.
+func (r *Router) prepare(ctx context.Context, frame server.DataFrame, send server.PacketWriter) (routePacket, bool, error) {
 	source, _, err := packetAddresses(frame.IPv4)
 	if err != nil {
-		return nil, err
+		return routePacket{}, false, err
 	}
-	guard, _ := ctx.Value(bindingGuardKey{}).(func(func()) bool)
-	var generation uint64
-	capture := func() {
+	if ctx.Err() != nil {
+		return routePacket{}, false, nil
+	}
+	guard := bindingGuard(ctx)
+	if guard != nil && !guard(noop) {
+		return routePacket{}, false, nil
+	}
+	r.mu.RLock()
+	generation, exists := r.bindings[source]
+	r.mu.RUnlock()
+	if !exists {
 		r.mu.Lock()
-		defer r.mu.Unlock()
-		var exists bool
-		generation, exists = r.bindings[source]
-		if !exists {
+		if generation, exists = r.bindings[source]; !exists {
 			r.nextBinding++
 			generation = r.nextBinding
 			r.bindings[source] = generation
 		}
+		r.mu.Unlock()
 	}
-	if ctx.Err() != nil {
-		return nil, nil
+	return routePacket{ctx: ctx, source: source, generation: generation, send: send, guard: guard}, true, nil
+}
+
+// admit decides, under one router lock, which packets may still be delivered:
+// their binding generation must be current. It publishes a route only when the
+// generation's route is not yet in place. accepted holds guard results on entry.
+func (r *Router) admit(packets []routePacket, accepted []bool) {
+	var lastCtx context.Context
+	lastCancelled := false
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range packets {
+		if !accepted[i] {
+			continue
+		}
+		p := &packets[i]
+		if p.ctx != lastCtx {
+			lastCtx, lastCancelled = p.ctx, p.ctx.Err() != nil
+		}
+		if lastCancelled || r.bindings[p.source] != p.generation {
+			accepted[i] = false
+			continue
+		}
+		if r.published[p.source] != p.generation {
+			r.routes[p.source] = p.send
+			r.published[p.source] = p.generation
+		}
 	}
-	if guard != nil {
-		if !guard(capture) {
-			return nil, nil
-		}
-	} else {
-		capture()
-	}
-	return func() bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		accepted := false
-		bind := func() {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			if r.bindings[source] == generation {
-				r.routes[source] = send
-				accepted = true
-			}
-		}
-		if guard != nil {
-			guard(bind)
-		} else {
-			bind()
-		}
-		return accepted
-	}, nil
 }
 
 type routeBatchKey struct{}
 type routeBatch struct {
-	router  *Router
-	bufs    [][]byte
-	spans   []span
-	offset  int
-	pending []routePacket
+	router   *Router
+	bufs     [][]byte
+	spans    []span
+	offset   int
+	pending  []routePacket
+	accepted []bool
 }
 
 type routePacket struct {
-	packet []byte
-	offset int
-	accept func() bool
+	packet     []byte
+	offset     int
+	ctx        context.Context
+	source     netip.Addr
+	generation uint64
+	send       server.PacketWriter
+	guard      func(func()) bool
 }
 
 // span identifies a packet's storage by address so growth can be found after
@@ -305,18 +355,30 @@ func (r *Router) NewRouteBatch(ctx context.Context) (context.Context, func() err
 }
 func (b *routeBatch) flush() error {
 	// Serialise delivery, then recheck each packet at admission to this write.
-	// Guards protect only short route publication, never blocking device I/O.
+	// Guards protect only short checks, never blocking device I/O.
 	b.router.writeMu.Lock()
 	defer b.router.writeMu.Unlock()
-	defer func() { clear(b.pending); b.pending = b.pending[:0] }()
-	for _, p := range b.pending {
+	defer func() {
+		clear(b.pending)
+		b.pending = b.pending[:0]
+		b.accepted = b.accepted[:0]
+	}()
+	// Guards may take transport locks, so evaluate them before the router lock.
+	b.accepted = b.accepted[:0]
+	for i := range b.pending {
+		g := b.pending[i].guard
+		b.accepted = append(b.accepted, g == nil || g(noop))
+	}
+	b.router.admit(b.pending, b.accepted)
+	for i := range b.pending {
+		if !b.accepted[i] {
+			continue
+		}
+		p := &b.pending[i]
 		if len(b.bufs) > 0 && (b.offset != p.offset || len(b.bufs) == 128) {
 			if err := b.write(); err != nil {
 				return err
 			}
-		}
-		if !p.accept() {
-			continue
 		}
 		b.offset = p.offset
 		b.bufs = append(b.bufs, p.packet)
@@ -347,20 +409,20 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 	if offset < 0 || offset > len(storage) || len(frame.IPv4) > len(storage)-offset {
 		return ErrInvalidPacket
 	}
-	accept, err := r.prepare(ctx, frame, send)
-	if err != nil || accept == nil {
+	p, ok, err := r.prepare(ctx, frame, send)
+	if err != nil || !ok {
 		return err
 	}
 	// Rebase without copying: all plain packets reserve the same TUN headroom.
 	headroom := min(offset, 16)
-	packet := storage[offset-headroom : offset+len(frame.IPv4)]
+	p.packet, p.offset = storage[offset-headroom:offset+len(frame.IPv4)], headroom
 	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
 	if batch == nil || batch.router != r {
 		batch = &routeBatch{router: r}
-		batch.pending = append(batch.pending, routePacket{packet, headroom, accept})
+		batch.pending = append(batch.pending, p)
 		return batch.flush()
 	}
-	batch.pending = append(batch.pending, routePacket{packet, headroom, accept})
+	batch.pending = append(batch.pending, p)
 	return nil
 }
 

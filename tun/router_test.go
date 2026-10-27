@@ -528,3 +528,62 @@ func TestBindingGuardsComposeAndRejectBeforeQueue(t *testing.T) {
 		t.Fatal("rejected guard published state")
 	}
 }
+
+// Steady-state owned routing must not allocate per packet, and flush must
+// publish a session's route once per binding generation.
+// countingDevice records writes without copying packets.
+type countingDevice struct {
+	*memoryDevice
+	writes int
+}
+
+func (d *countingDevice) Write(bufs [][]byte, _ int) (int, error) {
+	d.writes += len(bufs)
+	return len(bufs), nil
+}
+
+func TestOwnedRoutingSteadyStateAllocatesNothing(t *testing.T) {
+	d := &countingDevice{memoryDevice: newMemoryDevice()}
+	r, _ := NewRouter(d)
+	r.Bind(netip.MustParseAddr("10.0.0.2"), func([]byte) error { return nil })
+	ctx, flush := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	storage := make([]byte, 16+len(p))
+	copy(storage[16:], p)
+	send := server.PacketWriter(func([]byte) error { return nil })
+	frame := server.DataFrame{IPv4: storage[16:]}
+	route := func() {
+		if err := r.RouteIPv4Owned(ctx, frame, storage, 16, send); err != nil {
+			t.Fatal(err)
+		}
+		if err := flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route()
+	if allocs := testing.AllocsPerRun(100, route); allocs > 0.01 {
+		t.Fatalf("owned route and flush allocate %v per packet", allocs)
+	}
+	if d.writes != 102 {
+		t.Fatalf("writes=%d", d.writes)
+	}
+}
+
+func TestBindingGuardSlot(t *testing.T) {
+	ctx := WithBindingGuardSlot(context.Background())
+	calls := 0
+	guard := func(f func()) bool { calls++; f(); return true }
+	if !SetBindingGuard(ctx, guard) || bindingGuard(ctx) == nil {
+		t.Fatal("slot guard not set")
+	}
+	if allocs := testing.AllocsPerRun(100, func() { SetBindingGuard(ctx, guard) }); allocs != 0 {
+		t.Fatalf("SetBindingGuard allocates %v", allocs)
+	}
+	SetBindingGuard(ctx, nil)
+	if bindingGuard(ctx) != nil {
+		t.Fatal("cleared slot still guards")
+	}
+	if SetBindingGuard(context.Background(), guard) {
+		t.Fatal("set without slot reported success")
+	}
+}
