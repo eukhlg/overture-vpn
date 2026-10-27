@@ -79,35 +79,75 @@ func (r *Router) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	stopped := make(chan struct{})
 	defer func() { cancel(); <-stopped }()
-	buffer := make([]byte, 65535)
 	go func() { defer close(stopped); <-ctx.Done(); _ = r.device.Close() }()
+	size := r.device.BatchSize()
+	if size < 1 || size > 256 {
+		return errors.New("tun: invalid device batch size")
+	}
+	slots := make([]packetbuf.ReceiveSlot, size)
+	bufs := make([][]byte, size)
+	sizes := make([]int, size)
+	defer func() {
+		for i := range slots {
+			if slots[i].Buffer != nil {
+				slots[i].Buffer.Release()
+			}
+		}
+	}()
+	const offset = 16
 	for {
-		sizes := []int{0}
-		nread, err := r.device.Read([][]byte{buffer}, sizes, 0)
-		n := sizes[0]
-		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, io.EOF) {
+		for i := range slots {
+			if slots[i].Buffer == nil {
+				p, err := packetbuf.Acquire(packetbuf.MaxPacket)
+				if err != nil {
+					return err
+				}
+				if _, err = p.Prepend(offset); err != nil {
+					p.Release()
+					return err
+				}
+				slots[i].Buffer = p
+			}
+		}
+		count, readErr := packetbuf.Receive(slots, func(loans []packetbuf.ReceiveSlot) (int, error) {
+			for i := range loans {
+				bufs[i] = loans[i].Payload
+				sizes[i] = 0
+			}
+			n, err := r.device.Read(bufs, sizes, offset)
+			if n >= 0 && n <= len(loans) {
+				for i := 0; i < n; i++ {
+					loans[i].N = sizes[i] + offset
+				}
+			}
+			return n, err
+		})
+		clear(bufs)
+		for i := 0; i < count; i++ {
+			p := slots[i].Buffer
+			// Receive validates the loan, but a hostile device can return an invalid size.
+			if sizes[i] <= 0 || sizes[i] > packetbuf.MaxPacket {
+				return ErrInvalidPacket
+			}
+			if err := p.TrimFront(offset); err != nil {
+				return err
+			}
+			slots[i].Buffer = nil // dispatch consumes ownership on every outcome
+			if err := r.dispatchOwned(p); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if errors.Is(err, ErrInvalidPacket) || errors.Is(err, ErrNoRoute) {
+					continue
+				}
+				return err
+			}
+		}
+		if readErr != nil {
+			if ctx.Err() != nil || errors.Is(readErr, io.EOF) {
 				return nil
 			}
-			return err
-		}
-		if nread == 0 {
-			continue
-		}
-		packet, err := packetbuf.Copy(buffer[:n])
-		if err != nil {
-			return err
-		}
-		if err := r.dispatchOwned(packet); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			// TUN interfaces can receive IPv6 and transient packets for which no
-			// PPP route exists. Neither condition is fatal to the routing loop.
-			if errors.Is(err, ErrInvalidPacket) || errors.Is(err, ErrNoRoute) {
-				continue
-			}
-			return err
+			return readErr
 		}
 	}
 }

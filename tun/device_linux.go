@@ -125,3 +125,23 @@ func openSystem(config Config, offload bool) (Device, error) {
 	}()
 	return &systemDevice{Device: device, name: name, offload: offload}, nil
 }
+
+// Read uses caller storage directly even with VNET_HDR. Reverse segmentation
+// allows the first output to alias the receive buffer without a staging copy.
+func (d *systemDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if len(bufs) == 0 || len(sizes) < len(bufs) || offset < 0 || offset > len(bufs[0]) {
+		return 0, io.ErrShortBuffer
+	}
+	if !d.offload {
+		return d.Device.Read(bufs, sizes, offset)
+	}
+	if offset < virtioNetHdrLen {
+		return 0, io.ErrShortBuffer
+	}
+	in := bufs[0][offset-virtioNetHdrLen:]
+	n, err := d.Device.File().Read(in)
+	if err != nil {
+		return 0, err
+	}
+	return handleVirtioRead(in[:n], bufs, sizes, offset)
+}

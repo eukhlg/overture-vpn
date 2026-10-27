@@ -105,31 +105,6 @@ func socketOptionString(fd, level, option int) (string, error) {
 func (d *nativeDevice) Name() string { return d.name }
 func (d *nativeDevice) Close() error { return d.file.Close() }
 
-func (d *nativeDevice) readPacket(packet []byte) (int, error) {
-	buffer := make([]byte, len(packet)+4)
-	n, err := d.file.Read(buffer)
-	if n < 4 {
-		return 0, err
-	}
-	if binary.BigEndian.Uint32(buffer[:4]) != syscall.AF_INET {
-		return 0, fmt.Errorf("tun: non-IPv4 utun packet")
-	}
-	return copy(packet, buffer[4:n]), err
-}
-
-func (d *nativeDevice) writePacket(packet []byte) (int, error) {
-	buffer := make([]byte, len(packet)+4)
-	binary.BigEndian.PutUint32(buffer[:4], syscall.AF_INET)
-	copy(buffer[4:], packet)
-	n, err := d.file.Write(buffer)
-	if n >= 4 {
-		n -= 4
-	} else {
-		n = 0
-	}
-	return n, err
-}
-
 func (d *nativeDevice) BatchSize() int { return 1 }
 func (d *nativeDevice) MTU() (int, error) {
 	iface, err := net.InterfaceByName(d.name)
@@ -139,26 +114,34 @@ func (d *nativeDevice) MTU() (int, error) {
 	return iface.MTU, nil
 }
 func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	if len(bufs) == 0 || len(sizes) == 0 || offset < 0 || offset > len(bufs[0]) {
+	if len(bufs) == 0 || len(sizes) == 0 || offset < 4 || offset > len(bufs[0]) {
 		return 0, io.ErrShortBuffer
 	}
-	n, err := d.readPacket(bufs[0][offset:])
-	sizes[0] = n
-	if n > 0 {
-		return 1, err
+	b := bufs[0][offset-4:]
+	n, err := d.file.Read(b)
+	if n < 4 {
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		return 0, err
 	}
-	return 0, err
+	if binary.BigEndian.Uint32(b[:4]) != syscall.AF_INET {
+		return 0, fmt.Errorf("tun: non-IPv4 utun packet")
+	}
+	sizes[0] = n - 4
+	return 1, err
 }
 func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
 	for i, b := range bufs {
-		if offset < 0 || offset > len(b) {
+		if offset < 4 || offset > len(b) {
 			return i, io.ErrShortBuffer
 		}
-		n, err := d.writePacket(b[offset:])
+		binary.BigEndian.PutUint32(b[offset-4:offset], syscall.AF_INET)
+		n, err := d.file.Write(b[offset-4:])
 		if err != nil {
 			return i, err
 		}
-		if n != len(b)-offset {
+		if n != len(b)-offset+4 {
 			return i, io.ErrShortWrite
 		}
 	}
