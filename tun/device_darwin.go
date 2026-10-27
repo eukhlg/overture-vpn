@@ -5,6 +5,8 @@ package tun
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -100,7 +102,7 @@ func socketOptionString(fd, level, option int) (string, error) {
 func (d *nativeDevice) Name() string { return d.name }
 func (d *nativeDevice) Close() error { return d.file.Close() }
 
-func (d *nativeDevice) Read(packet []byte) (int, error) {
+func (d *nativeDevice) readPacket(packet []byte) (int, error) {
 	buffer := make([]byte, len(packet)+4)
 	n, err := d.file.Read(buffer)
 	if n < 4 {
@@ -112,7 +114,7 @@ func (d *nativeDevice) Read(packet []byte) (int, error) {
 	return copy(packet, buffer[4:n]), err
 }
 
-func (d *nativeDevice) Write(packet []byte) (int, error) {
+func (d *nativeDevice) writePacket(packet []byte) (int, error) {
 	buffer := make([]byte, len(packet)+4)
 	binary.BigEndian.PutUint32(buffer[:4], syscall.AF_INET)
 	copy(buffer[4:], packet)
@@ -123,4 +125,39 @@ func (d *nativeDevice) Write(packet []byte) (int, error) {
 		n = 0
 	}
 	return n, err
+}
+
+func (d *nativeDevice) BatchSize() int { return 1 }
+func (d *nativeDevice) MTU() (int, error) {
+	iface, err := net.InterfaceByName(d.name)
+	if err != nil {
+		return 0, err
+	}
+	return iface.MTU, nil
+}
+func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if len(bufs) == 0 || len(sizes) == 0 || offset < 0 || offset > len(bufs[0]) {
+		return 0, io.ErrShortBuffer
+	}
+	n, err := d.readPacket(bufs[0][offset:])
+	sizes[0] = n
+	if n > 0 {
+		return 1, err
+	}
+	return 0, err
+}
+func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for i, b := range bufs {
+		if offset < 0 || offset > len(b) {
+			return i, io.ErrShortBuffer
+		}
+		n, err := d.writePacket(b[offset:])
+		if err != nil {
+			return i, err
+		}
+		if n != len(b)-offset {
+			return i, io.ErrShortWrite
+		}
+	}
+	return len(bufs), nil
 }

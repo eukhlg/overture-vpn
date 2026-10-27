@@ -4,6 +4,8 @@ package tun
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"syscall"
 	"unsafe"
@@ -46,3 +48,38 @@ func Open(config Config) (Device, error) {
 }
 
 func (d *nativeDevice) Name() string { return d.name }
+
+func (d *nativeDevice) BatchSize() int { return 1 }
+func (d *nativeDevice) MTU() (int, error) {
+	iface, err := net.InterfaceByName(d.name)
+	if err != nil {
+		return 0, err
+	}
+	return iface.MTU, nil
+}
+func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if len(bufs) == 0 || len(sizes) == 0 || offset < 0 || offset > len(bufs[0]) {
+		return 0, io.ErrShortBuffer
+	}
+	n, err := d.File.Read(bufs[0][offset:])
+	sizes[0] = n
+	if n > 0 {
+		return 1, err
+	}
+	return 0, err
+}
+func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for i, b := range bufs {
+		if offset < 0 || offset > len(b) {
+			return i, io.ErrShortBuffer
+		}
+		n, err := d.File.Write(b[offset:])
+		if err != nil {
+			return i, err
+		}
+		if n != len(b)-offset {
+			return i, io.ErrShortWrite
+		}
+	}
+	return len(bufs), nil
+}

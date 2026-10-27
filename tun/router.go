@@ -75,7 +75,7 @@ func (r *Router) RouteIPv4(ctx context.Context, frame server.DataFrame, send ser
 		bind()
 	}
 	r.writeMu.Lock()
-	_, err = r.device.Write(frame.IPv4)
+	_, err = r.device.Write([][]byte{frame.IPv4}, 0)
 	r.writeMu.Unlock()
 	return err
 }
@@ -89,12 +89,17 @@ func (r *Router) Run(ctx context.Context) error {
 	buffer := make([]byte, 65535)
 	go func() { defer close(stopped); <-ctx.Done(); _ = r.device.Close() }()
 	for {
-		n, err := r.device.Read(buffer)
+		sizes := []int{0}
+		nread, err := r.device.Read([][]byte{buffer}, sizes, 0)
+		n := sizes[0]
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, io.EOF) {
 				return nil
 			}
 			return err
+		}
+		if nread == 0 {
+			continue
 		}
 		packet, err := packetbuf.Copy(buffer[:n])
 		if err != nil {

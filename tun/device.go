@@ -4,7 +4,6 @@ package tun
 
 import (
 	"errors"
-	"io"
 )
 
 var ErrUnsupported = errors.New("tun: unsupported operating system")
@@ -16,6 +15,12 @@ type Config struct {
 }
 
 type Device interface {
-	io.ReadWriteCloser
+	// Read fills packet buffers starting at offset and reports packet lengths.
+	Read(bufs [][]byte, sizes []int, offset int) (int, error)
+	// Write consumes packets beginning at offset; buffers remain caller-owned.
+	Write(bufs [][]byte, offset int) (int, error)
+	BatchSize() int
+	MTU() (int, error)
+	Close() error
 	Name() string
 }

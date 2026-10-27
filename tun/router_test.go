@@ -25,13 +25,31 @@ func newMemoryDevice() *memoryDevice {
 }
 func (d *memoryDevice) Name() string { return "test0" }
 func (d *memoryDevice) Close() error { d.once.Do(func() { close(d.closed) }); return nil }
-func (d *memoryDevice) Write(p []byte) (int, error) {
+func (d *memoryDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for _, p := range bufs {
+		if _, err := d.writePacket(p[offset:]); err != nil {
+			return 0, err
+		}
+	}
+	return len(bufs), nil
+}
+func (d *memoryDevice) BatchSize() int    { return 1 }
+func (d *memoryDevice) MTU() (int, error) { return 1400, nil }
+func (d *memoryDevice) writePacket(p []byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.written = append(d.written, append([]byte(nil), p...))
 	return len(p), nil
 }
-func (d *memoryDevice) Read(p []byte) (int, error) {
+func (d *memoryDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	n, err := d.readPacket(bufs[0][offset:])
+	sizes[0] = n
+	if n > 0 {
+		return 1, err
+	}
+	return 0, err
+}
+func (d *memoryDevice) readPacket(p []byte) (int, error) {
 	select {
 	case packet := <-d.reads:
 		return copy(p, packet), nil
