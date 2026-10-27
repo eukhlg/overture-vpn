@@ -122,7 +122,7 @@ func main() {
 	var router *tun.Router
 	var cleanup func(context.Context) error
 	if resolved.TUN.Enabled {
-		device, err := tun.Open(tun.Config{Name: resolved.TUN.Name, Backend: resolved.TUN.Backend})
+		device, err := tun.Open(tun.Config{Name: resolved.TUN.Name, Backend: resolved.TUN.Backend, MTU: resolved.Network.MTU})
 		if err != nil {
 			log.Fatal(err)
 		}

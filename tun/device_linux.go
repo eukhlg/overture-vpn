@@ -4,85 +4,69 @@ package tun
 
 import (
 	"fmt"
-	"io"
-	"net"
 	"os"
-	"syscall"
-	"unsafe"
+
+	"golang.org/x/sys/unix"
+	wgtun "golang.zx2c4.com/wireguard/tun"
 )
 
-const (
-	tunSetIFF  = 0x400454ca
-	iffTUN     = 0x0001
-	iffNoPI    = 0x1000
-	ifNameSize = 16
-)
-
-type nativeDevice struct {
-	*os.File
+type systemDevice struct {
+	wgtun.Device
 	name string
+}
+
+func (d *systemDevice) Name() string { return d.name }
+
+// WireGuard reports bytes written. Our interface reports submitted packets.
+func (d *systemDevice) Write(bufs [][]byte, offset int) (int, error) {
+	_, err := d.Device.Write(bufs, offset)
+	if err != nil {
+		return 0, err
+	}
+	return len(bufs), nil
 }
 
 func Open(config Config) (Device, error) {
 	if err := validateBackend(config); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	return openSystem(config)
+}
+func openSystem(config Config) (Device, error) {
+	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("tun: open /dev/net/tun: %w", err)
+		return nil, fmt.Errorf("tun: open: %w", err)
 	}
-	var request [40]byte
-	if len(config.Name) >= ifNameSize {
-		file.Close()
-		return nil, fmt.Errorf("tun: interface name is too long")
-	}
-	copy(request[:ifNameSize], config.Name)
-	*(*uint16)(unsafe.Pointer(&request[ifNameSize])) = iffTUN | iffNoPI
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, file.Fd(), tunSetIFF, uintptr(unsafe.Pointer(&request[0])))
-	if errno != 0 {
-		file.Close()
-		return nil, fmt.Errorf("tun: TUNSETIFF: %w", errno)
-	}
-	nameLength := 0
-	for nameLength < ifNameSize && request[nameLength] != 0 {
-		nameLength++
-	}
-	return &nativeDevice{File: file, name: string(request[:nameLength])}, nil
-}
-
-func (d *nativeDevice) Name() string { return d.name }
-
-func (d *nativeDevice) BatchSize() int { return 1 }
-func (d *nativeDevice) MTU() (int, error) {
-	iface, err := net.InterfaceByName(d.name)
+	fail := func(err error) (Device, error) { unix.Close(fd); return nil, err }
+	request, err := unix.NewIfreq(config.Name)
 	if err != nil {
-		return 0, err
+		return fail(err)
 	}
-	return iface.MTU, nil
-}
-func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	if len(bufs) == 0 || len(sizes) == 0 || offset < 0 || offset > len(bufs[0]) {
-		return 0, io.ErrShortBuffer
+	request.SetUint16(unix.IFF_TUN | unix.IFF_NO_PI)
+	if err := unix.IoctlIfreq(fd, unix.TUNSETIFF, request); err != nil {
+		return fail(err)
 	}
-	n, err := d.File.Read(bufs[0][offset:])
-	sizes[0] = n
-	if n > 0 {
-		return 1, err
+	if err := unix.SetNonblock(fd, true); err != nil {
+		return fail(err)
 	}
-	return 0, err
-}
-func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
-	for i, b := range bufs {
-		if offset < 0 || offset > len(b) {
-			return i, io.ErrShortBuffer
+	file := os.NewFile(uintptr(fd), "tun")
+	mtu := config.MTU
+	if mtu == 0 {
+		mtu = 1400
+	}
+	device, err := wgtun.CreateTUNFromFile(file, mtu)
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	name, err := device.Name()
+	if err != nil {
+		device.Close()
+		return nil, err
+	}
+	go func() {
+		for range device.Events() {
 		}
-		n, err := d.File.Write(b[offset:])
-		if err != nil {
-			return i, err
-		}
-		if n != len(b)-offset {
-			return i, io.ErrShortWrite
-		}
-	}
-	return len(bufs), nil
+	}()
+	return &systemDevice{Device: device, name: name}, nil
 }

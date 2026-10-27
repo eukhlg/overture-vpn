@@ -9,6 +9,7 @@ import (
 var ErrUnsupported = errors.New("tun: unsupported operating system")
 
 type Config struct {
+	MTU     int
 	Backend string
 
 	// Name requests an interface name. Linux accepts names such as "l2tp0".
