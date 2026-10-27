@@ -5,18 +5,20 @@ from image_plan import MissingRef, REPOS, feature_tag, plan, selection, resolve
 
 
 class ImagePlanTests(unittest.TestCase):
-    def test_three_independent_branches_are_used_exactly(self):
+    def test_independent_branches_are_used_exactly(self):
         calls = []
         def lookup(repo, ref):
             calls.append((repo, ref))
-            return {'eukhlg/overture-vpn': 'a', 'eukhlg/l2tp-go': 'b', 'eukhlg/ipsec-go': 'c'}[repo] * 40
+            return {'eukhlg/overture-vpn': 'a', 'eukhlg/l2tp-go': 'b', 'eukhlg/ipsec-go': 'c', 'eukhlg/netio': 'd'}[repo] * 40
         result = plan('feature', 'app-feature', resolve_ref=lookup,
-                      l2tp_branch='l2tp-feature', ipsec_branch='ipsec-feature')
-        self.assertEqual(calls, [(REPOS['app'], 'app-feature'), (REPOS['l2tp'], 'l2tp-feature'), (REPOS['ipsec'], 'ipsec-feature')])
+                      l2tp_branch='l2tp-feature', ipsec_branch='ipsec-feature', netio_branch='netio-feature')
+        self.assertEqual(calls, [(REPOS['app'], 'app-feature'), (REPOS['l2tp'], 'l2tp-feature'), (REPOS['ipsec'], 'ipsec-feature'), (REPOS['netio'], 'netio-feature')])
         self.assertEqual(result['app_sha'], 'a' * 40)
         self.assertEqual(result['l2tp_sha'], 'b' * 40)
         self.assertEqual(result['ipsec_sha'], 'c' * 40)
         self.assertEqual(result['l2tp_ref'], 'l2tp-feature')
+        self.assertEqual(result['netio_sha'], 'd' * 40)
+        self.assertEqual(result['netio_ref'], 'netio-feature')
 
     def test_missing_selected_branch_never_falls_back(self):
         calls = []
@@ -52,7 +54,7 @@ class ImagePlanTests(unittest.TestCase):
         result = plan('main', 'feature', resolve_ref=lookup,
                       l2tp_branch='other', ipsec_branch='another', image_name='ignored')
         self.assertEqual(result['tag'], 'testing')
-        self.assertEqual(calls, ['main', 'main', 'main'])
+        self.assertEqual(calls, ['main'] * len(REPOS))
 
     def test_release_uses_tag_and_pinned_dependencies(self):
         calls = []
@@ -63,6 +65,7 @@ class ImagePlanTests(unittest.TestCase):
         self.assertEqual(result['tag'], '0.4.0')
         self.assertEqual(result['ipsec_ref'], 'pinned')
         self.assertEqual(result['l2tp_sha'], '')
+        self.assertEqual(result['netio_ref'], 'pinned')
         self.assertEqual(calls, [(REPOS['app'], 'refs/tags/v0.4.0')])
 
     def test_manual_names_cannot_overwrite_stable_tags(self):

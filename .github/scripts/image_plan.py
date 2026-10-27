@@ -3,7 +3,7 @@ import os
 import re
 import subprocess
 
-REPOS = {'app': 'eukhlg/overture-vpn', 'l2tp': 'eukhlg/l2tp-go', 'ipsec': 'eukhlg/ipsec-go'}
+REPOS = {'app': 'eukhlg/overture-vpn', 'l2tp': 'eukhlg/l2tp-go', 'ipsec': 'eukhlg/ipsec-go', 'netio': 'eukhlg/netio'}
 
 
 class MissingRef(ValueError):
@@ -56,12 +56,13 @@ def resolve(repo, ref):
 
 
 def plan(mode, branch='', release_tag='', resolve_ref=resolve,
-         l2tp_branch='main', ipsec_branch='main', image_name=''):
+         l2tp_branch='main', ipsec_branch='main', image_name='', netio_branch='main'):
     tag, branch = selection(mode, branch, release_tag, image_name)
     if mode == 'release':
         return dict(tag=tag, app_sha=resolve_ref(REPOS['app'], branch), app_ref=branch,
-                    l2tp_sha='', l2tp_ref='pinned', ipsec_sha='', ipsec_ref='pinned')
-    refs = dict.fromkeys(REPOS, 'main') if mode == 'main' else dict(app=branch, l2tp=l2tp_branch, ipsec=ipsec_branch)
+                    l2tp_sha='', l2tp_ref='pinned', ipsec_sha='', ipsec_ref='pinned',
+                    netio_sha='', netio_ref='pinned')
+    refs = dict.fromkeys(REPOS, 'main') if mode == 'main' else dict(app=branch, l2tp=l2tp_branch, ipsec=ipsec_branch, netio=netio_branch)
     result = {'tag': tag}
     for component, repo in REPOS.items():
         ref = refs[component]
@@ -79,6 +80,7 @@ if __name__ == '__main__':
     selected = plan(mode, branch, release_tag,
                     l2tp_branch=os.environ.get('L2TP_BRANCH', 'main'),
                     ipsec_branch=os.environ.get('IPSEC_BRANCH', 'main'),
+                    netio_branch=os.environ.get('NETIO_BRANCH', 'main'),
                     image_name=os.environ.get('IMAGE_NAME', ''))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         for key, value in selected.items():

@@ -18,6 +18,11 @@ on:
         required: true
         default: main
         type: string
+      netio_branch:
+        description: netio branch to build
+        required: true
+        default: main
+        type: string
       image_name:
         description: Optional image name (defaults to app branch; testing- is added)
         required: false
@@ -33,5 +38,6 @@ jobs:
       app_branch: ${{ inputs.app_branch }}
       l2tp_branch: ${{ inputs.l2tp_branch }}
       ipsec_branch: ${{ inputs.ipsec_branch }}
+      netio_branch: ${{ inputs.netio_branch }}
       image_name: ${{ inputs.image_name }}
     secrets: inherit

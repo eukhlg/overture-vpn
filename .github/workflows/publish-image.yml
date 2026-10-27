@@ -14,6 +14,9 @@ on:
       ipsec_branch:
         default: main
         type: string
+      netio_branch:
+        default: main
+        type: string
       image_name:
         default: ""
         type: string
@@ -35,9 +38,11 @@ jobs:
       app_sha: ${{ steps.plan.outputs.app_sha }}
       l2tp_sha: ${{ steps.plan.outputs.l2tp_sha }}
       ipsec_sha: ${{ steps.plan.outputs.ipsec_sha }}
+      netio_sha: ${{ steps.plan.outputs.netio_sha }}
       app_ref: ${{ steps.plan.outputs.app_ref }}
       l2tp_ref: ${{ steps.plan.outputs.l2tp_ref }}
       ipsec_ref: ${{ steps.plan.outputs.ipsec_ref }}
+      netio_ref: ${{ steps.plan.outputs.netio_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +56,7 @@ jobs:
           IMAGE_BRANCH: ${{ inputs.app_branch }}
           L2TP_BRANCH: ${{ inputs.l2tp_branch }}
           IPSEC_BRANCH: ${{ inputs.ipsec_branch }}
+          NETIO_BRANCH: ${{ inputs.netio_branch }}
           IMAGE_NAME: ${{ inputs.image_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: python3 .github/scripts/image_plan.py
@@ -107,16 +113,21 @@ jobs:
         env:
           L2TP_SHA: ${{ needs.plan.outputs.l2tp_sha }}
           IPSEC_SHA: ${{ needs.plan.outputs.ipsec_sha }}
+          NETIO_SHA: ${{ needs.plan.outputs.netio_sha }}
         run: |
-          go get -t "github.com/eukhlg/l2tp-go/...@$L2TP_SHA" "github.com/eukhlg/ipsec-go/...@$IPSEC_SHA"
+          go get -t "github.com/eukhlg/l2tp-go/...@$L2TP_SHA" "github.com/eukhlg/ipsec-go/...@$IPSEC_SHA" "github.com/eukhlg/netio/...@$NETIO_SHA"
           echo "l2tp_go=$L2TP_SHA" >> "$GITHUB_ENV"
           echo "ipsec_go=$IPSEC_SHA" >> "$GITHUB_ENV"
+          echo "netio=$NETIO_SHA" >> "$GITHUB_ENV"
 
       - name: Test L2TP
         run: go test -race github.com/eukhlg/l2tp-go/...
 
       - name: Test IPsec
         run: go test -race github.com/eukhlg/ipsec-go/...
+
+      - name: Test netio
+        run: go test -race github.com/eukhlg/netio/...
 
       - name: Test application
         run: |
@@ -130,7 +141,7 @@ jobs:
         run: |
           go list -m all >> "$GITHUB_STEP_SUMMARY"
           echo "Application commit: $APP_SHA" >> "$GITHUB_STEP_SUMMARY"
-          for module in l2tp-go ipsec-go; do
+          for module in l2tp-go ipsec-go netio; do
             key=${module//-/_}
             version=$(go list -m -f '{{.Version}}' "github.com/eukhlg/$module")
             echo "${key}_version=$version" >> "$GITHUB_ENV"
@@ -183,10 +194,13 @@ jobs:
             org.opencontainers.image.revision=${{ needs.plan.outputs.app_sha }}
             io.overture.l2tp-go.revision=${{ env.l2tp_go }}
             io.overture.ipsec-go.revision=${{ env.ipsec_go }}
+            io.overture.netio.revision=${{ env.netio }}
             io.overture.app.branch=${{ needs.plan.outputs.app_ref }}
             io.overture.l2tp-go.branch=${{ needs.plan.outputs.l2tp_ref }}
             io.overture.ipsec-go.branch=${{ needs.plan.outputs.ipsec_ref }}
+            io.overture.netio.branch=${{ needs.plan.outputs.netio_ref }}
             io.overture.l2tp-go.version=${{ env.l2tp_go_version }}
             io.overture.ipsec-go.version=${{ env.ipsec_go_version }}
+            io.overture.netio.version=${{ env.netio_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
