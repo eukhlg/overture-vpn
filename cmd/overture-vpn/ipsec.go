@@ -164,6 +164,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			if _, err := buffer.Prepend(buffer.Headroom()); err != nil {
 				return err
 			}
+			if router != nil && router.OffloadEnabled() {
+				if _, err := buffer.Append(buffer.Tailroom()); err != nil {
+					return err
+				}
+			}
 			callbackContext = server.WithPacketStorage(callbackContext, buffer.Bytes())
 		}
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {

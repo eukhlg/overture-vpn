@@ -232,3 +232,8 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 	batch.bufs = append(batch.bufs, packet)
 	return nil
 }
+
+func (r *Router) OffloadEnabled() bool {
+	d, ok := r.device.(interface{ OffloadEnabled() bool })
+	return ok && d.OffloadEnabled()
+}

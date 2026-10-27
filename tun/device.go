@@ -9,8 +9,9 @@ import (
 var ErrUnsupported = errors.New("tun: unsupported operating system")
 
 type Config struct {
-	MTU     int
-	Backend string
+	MTU            int
+	DisableOffload bool
+	Backend        string
 
 	// Name requests an interface name. Linux accepts names such as "l2tp0".
 	// macOS accepts an explicit "utunN" or an empty name for automatic choice.
