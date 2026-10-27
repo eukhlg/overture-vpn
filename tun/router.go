@@ -55,6 +55,10 @@ func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 
 // BindOwned installs a writer consuming its buffer on every outcome. Device
 // I/O and routing remain unchanged; only return-packet storage is transferred.
+// Ownership contract of the download path: Run hands each packet to send and
+// never touches it again; send either releases it or passes it to a transport,
+// whose sender goroutine releases it exactly once after the write (see
+// udptransport.Datagram). Packets of one flow must reach one sender in order.
 func (r *Router) BindOwned(address netip.Addr, send func(*packetbuf.Buffer) error) {
 	r.mu.Lock()
 	r.nextBinding++

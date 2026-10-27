@@ -19,12 +19,13 @@ var (
 	_ server.ReceiveBufferAllocator = (*Transport)(nil)
 	_ server.OwnedPacketWriter      = (*Transport)(nil)
 	_ server.SessionDatagramWriter  = (*Transport)(nil)
+	_ server.FlowPacketWriter       = (*Transport)(nil)
 )
 
 type Transport struct {
 	net.PacketConn
 	receiver *udptransport.Conn
-	sender   *udptransport.Sender
+	sender   *udptransport.ShardedSender
 	messages []udptransport.Message
 }
 
@@ -43,17 +44,39 @@ func New(conn net.PacketConn, batchSize ...int) (*Transport, error) {
 }
 
 func NewWithOptions(conn net.PacketConn, size int, options udptransport.Options) (*Transport, error) {
+	return NewSharded(conn, size, 1, options)
+}
+
+// NewSharded sends through shards independent sender goroutines on the same
+// socket. The first shard shares the receiver's Conn (separate rx/tx state);
+// each further shard has its own batch writer. Flow-keyed writes keep each
+// inner flow on one shard; control and unkeyed writes use flow key 0.
+func NewSharded(conn net.PacketConn, size, shards int, options udptransport.Options) (*Transport, error) {
+	if shards < 1 {
+		return nil, errors.New("plain L2TP: at least one send shard required")
+	}
 	udp, err := udptransport.NewWithOptions(conn, size, options)
 	if err != nil {
 		return nil, err
 	}
+	writers := []udptransport.Writer{udp}
+	for len(writers) < shards {
+		writer, err := udptransport.NewWithOptions(conn, size, options)
+		if err != nil {
+			return nil, err
+		}
+		writers = append(writers, writer)
+	}
 	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
-	sender, err := udptransport.NewSenderWithWriter(context.Background(), conn, udp, udptransport.SenderQueueCapacity, size)
+	sender, err := udptransport.NewShardedSender(context.Background(), conn, writers, udptransport.SenderQueueCapacity, size)
 	if err != nil {
 		return nil, err
 	}
 	return &Transport{PacketConn: conn, receiver: udp, sender: sender, messages: make([]udptransport.Message, size)}, nil
 }
+
+// SendShards reports the number of sender goroutines.
+func (t *Transport) SendShards() int { return t.sender.Shards() }
 
 func (t *Transport) BatchSize() int { return t.receiver.BatchSize() }
 func (t *Transport) AcquireReceiveBuffer() (server.ReceiveBuffer, error) {
@@ -98,7 +121,13 @@ func (t *Transport) WriteTo(payload []byte, peer net.Addr) (int, error) {
 
 // WritePacket always consumes the buffer, including after failed acceptance.
 func (t *Transport) WritePacket(buffer server.OwnedPacketBuffer, peer net.Addr, eligible func() bool) error {
-	err := t.sender.Enqueue(context.Background(), udptransport.Datagram{Payload: buffer.Bytes(), Peer: peer, Owner: buffer, Eligible: eligible})
+	return t.WriteFlowPacket(buffer, peer, eligible, 0)
+}
+
+// WriteFlowPacket is WritePacket on the shard selected by flow. It always
+// consumes the buffer; accepted buffers are released by that shard's sender.
+func (t *Transport) WriteFlowPacket(buffer server.OwnedPacketBuffer, peer net.Addr, eligible func() bool, flow uint32) error {
+	err := t.sender.Enqueue(context.Background(), udptransport.Datagram{Payload: buffer.Bytes(), Peer: peer, Owner: buffer, Eligible: eligible, Flow: flow})
 	if err != nil {
 		buffer.Release()
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
+	"github.com/eukhlg/netio/udptransport"
 )
 
 func TestAdapterMixedDestinationsAndTransfer(t *testing.T) {
@@ -220,5 +221,53 @@ func TestAdapterControlHandshakeAndGracefulStop(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestShardedTransportKeepsFlowsInOrderOverRealSocket(t *testing.T) {
+	receiver, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+	socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := NewSharded(socket, 32, 3, udptransport.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	if transport.SendShards() != 3 {
+		t.Fatalf("shards = %d", transport.SendShards())
+	}
+	const flows, perFlow = 6, 40
+	for i := 0; i < perFlow; i++ {
+		for f := 0; f < flows; f++ {
+			buffer, _ := packetbuf.Copy([]byte{byte(f), byte(i)})
+			if err := transport.WriteFlowPacket(buffer, receiver.LocalAddr(), nil, uint32(f)*0x9e3779b9); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := transport.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next := make([]int, flows)
+	receiver.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for n := 0; n < flows*perFlow; n++ {
+		buf := make([]byte, 4)
+		if _, _, err := receiver.ReadFrom(buf); err != nil {
+			t.Fatal(err)
+		}
+		f := int(buf[0])
+		if int(buf[1]) != next[f] {
+			t.Fatalf("flow %d: got %d, want %d", f, buf[1], next[f])
+		}
+		next[f]++
+	}
+	if _, err := NewSharded(socket, 32, 0, udptransport.Options{}); err == nil {
+		t.Fatal("zero shards accepted")
 	}
 }

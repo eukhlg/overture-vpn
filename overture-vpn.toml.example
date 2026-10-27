@@ -45,6 +45,9 @@ receive_buffer = 1048576
 udp_batch = 128
 # Linux UDP send segmentation; L2TP_UDP_GSO. Unsupported sockets fall back.
 udp_gso = true
+# Sender goroutines on the plain socket, 0..16; L2TP_SEND_SHARDS. Each inner
+# flow stays on one shard, in order. 0 = automatic clamp(GOMAXPROCS/3, 1, 4).
+send_shards = 0
 
 [ipsec]
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.

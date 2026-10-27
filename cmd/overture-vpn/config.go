@@ -54,6 +54,7 @@ type appConfig struct {
 		ReceiveBuffer int  `toml:"receive_buffer"`
 		UDPBatch      int  `toml:"udp_batch"`
 		UDPGSO        bool `toml:"udp_gso"`
+		SendShards    int  `toml:"send_shards"`
 	} `toml:"l2tp"`
 	IPsec struct {
 		Enabled          bool   `toml:"enabled"`
@@ -152,6 +153,16 @@ func loadConfig(path string) (appConfig, error) {
 	return c, nil
 }
 
+// sendShards resolves l2tp.send_shards; 0 selects the automatic count.
+func (c appConfig) sendShards() int {
+	if c.L2TP.SendShards > 0 {
+		return c.L2TP.SendShards
+	}
+	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+}
+
+// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards use the
+// same automatic count.
 func defaultReceiveWorkers(maxProcs int) int {
 	workers := maxProcs / 3
 	if workers < 1 {
@@ -174,6 +185,9 @@ func applyEnvironment(c *appConfig) error {
 		return err
 	}
 	if err := overrideInt("L2TP_UDP_BATCH", &c.L2TP.UDPBatch); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_SEND_SHARDS", &c.L2TP.SendShards); err != nil {
 		return err
 	}
 	overrideString("L2TP_LISTEN", &c.Server.Listen)
@@ -297,6 +311,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if err := udptransport.ValidateBatchSize(c.L2TP.UDPBatch); err != nil {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.udp_batch: %w", err)
+	}
+	if c.L2TP.SendShards < 0 || c.L2TP.SendShards > 16 {
+		return networkConfig{}, nil, fmt.Errorf("l2tp.send_shards must be between 0 and 16")
 	}
 	if err := udptransport.ValidateBatchSize(c.IPsec.UDPSendBatch); err != nil {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.udp_send_batch: %w", err)

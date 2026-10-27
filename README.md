@@ -170,6 +170,14 @@ The same size limits and
 startup logging apply. `[l2tp].udp_gso` (`L2TP_UDP_GSO`, default true) controls
 send segmentation for reverse ACKs and download on this listener. These options also affect UDP/1701 when IPsec is enabled.
 
+`[l2tp].send_shards` (`L2TP_SEND_SHARDS`, 0..16) runs that many sender
+goroutines on the plain socket. The router hashes each inner IPv4 flow
+(5-tuple; 3-tuple for fragments and other protocols) before framing, so one
+flow always uses one shard and keeps its order, while the kernel send work of
+different flows runs on different CPUs. `0` (default) selects
+`clamp(GOMAXPROCS/3, 1, 4)`. A single flow uses one shard whatever the setting.
+Startup logs the effective count.
+
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,
 a 256 KiB request improved mean one-stream NAT-T upload from 592 to 791 Mbit/s,

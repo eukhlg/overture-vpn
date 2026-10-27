@@ -11,7 +11,7 @@ import (
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"L2TP_PIPELINE", "L2TP_UDP_GSO", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
+		"L2TP_PIPELINE", "L2TP_UDP_GSO", "L2TP_SEND_SHARDS", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
@@ -437,5 +437,32 @@ func TestPlainPipelineConfig(t *testing.T) {
 	t.Setenv("L2TP_PIPELINE", "invalid")
 	if _, err = loadConfig(""); err == nil || !strings.Contains(err.Error(), "L2TP_PIPELINE") {
 		t.Fatal(err)
+	}
+}
+
+func TestPlainSendShardsConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || c.L2TP.SendShards != 0 || c.sendShards() != defaultReceiveWorkers(runtime.GOMAXPROCS(0)) {
+		t.Fatalf("default: %d %v", c.L2TP.SendShards, err)
+	}
+	path := writeConfig(t, "[l2tp]\nsend_shards = 3\n")
+	c, err = loadConfig(path)
+	if err != nil || c.sendShards() != 3 {
+		t.Fatalf("file: %d %v", c.L2TP.SendShards, err)
+	}
+	t.Setenv("L2TP_SEND_SHARDS", "1")
+	c, err = loadConfig(path)
+	if err != nil || c.sendShards() != 1 {
+		t.Fatalf("environment: %d %v", c.L2TP.SendShards, err)
+	}
+	for _, value := range []int{-1, 0, 1, 16, 17} {
+		c := defaultConfig()
+		c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+		c.L2TP.SendShards = value
+		valid := value >= 0 && value <= 16
+		if _, _, err := c.validate(); (err == nil) != valid {
+			t.Fatalf("send_shards=%d valid=%v err=%v", value, valid, err)
+		}
 	}
 }

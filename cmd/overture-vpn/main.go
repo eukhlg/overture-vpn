@@ -16,6 +16,7 @@ import (
 	"errors"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/flowhash"
 	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/netio/udptransport"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
@@ -105,12 +106,13 @@ func main() {
 		_ = conn.Close()
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.NewWithOptions(conn, resolved.L2TP.UDPBatch, udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
+	plain, err := plainl2tp.NewSharded(conn, resolved.L2TP.UDPBatch, resolved.sendShards(), udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
 	if err != nil {
 		conn.Close()
 		log.Fatal(err)
 	}
 	log.Printf("plain L2TP UDP GSO active=%t requested=%t", plain.GSOEnabled(), resolved.L2TP.UDPGSO)
+	log.Printf("plain L2TP send shards=%d requested=%d (0 = automatic)", plain.SendShards(), resolved.L2TP.SendShards)
 	s, err := server.New(plain, serverConfig)
 	if err != nil {
 		plain.Close()
@@ -163,9 +165,11 @@ func main() {
 		if router != nil && info.Protocol == "l2tp" {
 			router.Bind(info.Address, send)
 			if info.Protocol == "l2tp" {
-				owned := s.OwnedWriter(info.TunnelID, info.SessionID)
+				// Hash the inner flow before framing: one flow stays on one send shard.
+				// The writer consumes the buffer on every outcome (see OwnedFlowWriter).
+				owned := s.OwnedFlowWriter(info.TunnelID, info.SessionID)
 				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
-					err := owned(buffer)
+					err := owned(buffer, flowhash.IPv4(buffer.Bytes()))
 					if errors.Is(err, server.ErrUnknownTunnel) || errors.Is(err, server.ErrSessionNotEstablished) {
 						return nil
 					}
