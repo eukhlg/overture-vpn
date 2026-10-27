@@ -25,13 +25,31 @@ func newMemoryDevice() *memoryDevice {
 }
 func (d *memoryDevice) Name() string { return "test0" }
 func (d *memoryDevice) Close() error { d.once.Do(func() { close(d.closed) }); return nil }
-func (d *memoryDevice) Write(p []byte) (int, error) {
+func (d *memoryDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for _, p := range bufs {
+		if _, err := d.writePacket(p[offset:]); err != nil {
+			return 0, err
+		}
+	}
+	return len(bufs), nil
+}
+func (d *memoryDevice) BatchSize() int    { return 1 }
+func (d *memoryDevice) MTU() (int, error) { return 1400, nil }
+func (d *memoryDevice) writePacket(p []byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.written = append(d.written, append([]byte(nil), p...))
 	return len(p), nil
 }
-func (d *memoryDevice) Read(p []byte) (int, error) {
+func (d *memoryDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	n, err := d.readPacket(bufs[0][offset:])
+	sizes[0] = n
+	if n > 0 {
+		return 1, err
+	}
+	return 0, err
+}
+func (d *memoryDevice) readPacket(p []byte) (int, error) {
 	select {
 	case packet := <-d.reads:
 		return copy(p, packet), nil
@@ -184,5 +202,132 @@ func TestProtectedRouteCannotBindAfterSessionClose(t *testing.T) {
 	}
 	if len(router.routes) != 0 || len(device.written) != 0 {
 		t.Fatal("closed protected session published a route or TUN write")
+	}
+}
+
+func TestOwnedUploadBatchReferencesAndDriverIsolation(t *testing.T) {
+	d := newMemoryDevice()
+	r, _ := NewRouter(d)
+	ctx, flush := r.NewRouteBatch(context.Background())
+	other, flushOther := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	a, b := make([]byte, 16+len(p)), make([]byte, 24+len(p))
+	copy(a[16:], p)
+	copy(b[24:], p)
+	for i, s := range [][]byte{a, b} {
+		off := 16 + i*8
+		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: s[off:]}, s, off, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(d.written) != 0 {
+		t.Fatal("wrote before flush")
+	}
+	if err := flushOther(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 0 {
+		t.Fatal("driver state shared")
+	}
+	_ = other
+	// The batch keeps references: changing the original bytes changes the write.
+	a[16+8] = 42
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 2 || d.written[0][8] != 42 {
+		t.Fatal("packet copied or batch lost")
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 2 {
+		t.Fatal("idle flush repeated packets")
+	}
+}
+
+type directReadDevice struct {
+	*memoryDevice
+	packet []byte
+	view   []byte
+}
+
+func (d *directReadDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if d.packet == nil {
+		return d.memoryDevice.Read(bufs, sizes, offset)
+	}
+	sizes[0] = copy(bufs[0][offset:], d.packet)
+	d.view = bufs[0][offset : offset+sizes[0]]
+	d.packet = nil
+	return 1, nil
+}
+func TestRouterRunTransfersTheReadBuffer(t *testing.T) {
+	p := ipv4Packet([4]byte{8, 8, 8, 8}, [4]byte{10, 0, 0, 2})
+	d := &directReadDevice{memoryDevice: newMemoryDevice(), packet: p}
+	r, _ := NewRouter(d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	called := false
+	r.BindOwned(netip.MustParseAddr("10.0.0.2"), func(b *packetbuf.Buffer) error {
+		called = true
+		if &b.Bytes()[0] != &d.view[0] || b.Headroom() != packetbuf.Headroom {
+			t.Error("read packet copied or headroom changed")
+		}
+		b.Release()
+		cancel()
+		return nil
+	})
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("packet not dispatched")
+	}
+}
+
+// growDevice mimics GRO: it grows the first entry into spare capacity by the
+// second entry's packet, then swaps the two entries like the prepend path.
+type growDevice struct{ *memoryDevice }
+
+func (d *growDevice) Write(bufs [][]byte, offset int) (int, error) {
+	if len(bufs) >= 2 {
+		bufs[0] = append(bufs[0], bufs[1][offset:]...)
+		bufs[0], bufs[1] = bufs[1], bufs[0]
+	}
+	return len(bufs), nil
+}
+
+func TestOwnedBatchScrubsOffloadGrowthWithoutDirtyingSlots(t *testing.T) {
+	d := &growDevice{newMemoryDevice()}
+	r, _ := NewRouter(d)
+	ctx, flush := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	var buffers []*packetbuf.Buffer
+	var full [][]byte
+	for i := 0; i < 2; i++ {
+		b, err := packetbuf.Acquire(32 + len(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		storage := b.BytesWithTailroom()
+		copy(storage[32:], p)
+		full = append(full, storage[:cap(storage)])
+		buffers = append(buffers, b)
+		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[32:]}, storage, 32, func([]byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range full {
+		for j := 32 + len(p); j < len(f); j++ {
+			if f[j] != 0 {
+				t.Fatalf("buffer %d byte %d not zero after flush", i, j)
+			}
+		}
+	}
+	for _, b := range buffers {
+		b.Release()
 	}
 }

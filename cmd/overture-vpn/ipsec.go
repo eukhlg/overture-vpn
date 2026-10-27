@@ -99,6 +99,9 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	raw.Registry, natt.Registry = registry, registry
 	raw.ReceiveWorkers, natt.ReceiveWorkers = config.IPsec.ReceiveWorkers, config.IPsec.ReceiveWorkers
 	raw.HandleDecrypted, natt.HandleDecrypted = bridge.HandleDecryptedPacket, bridge.HandleDecryptedPacket
+	if router != nil {
+		raw.NewDeliveryBatch, natt.NewDeliveryBatch = router.NewRouteBatch, router.NewRouteBatch
+	}
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
@@ -155,6 +158,20 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	bridge.Sender = sender
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
+		if buffer := ipsec.DeliveryBuffer(callbackContext); buffer != nil {
+			// Delivery owns the buffer until its flush hook returns. Recover the
+			// consumed receive headroom without moving any packet bytes.
+			if _, err := buffer.Prepend(buffer.Headroom()); err != nil {
+				return err
+			}
+			storage := buffer.Bytes()
+			if router != nil && router.OffloadEnabled() {
+				// Spare capacity for GRO without marking the slot dirty; the
+				// router zeroes whatever the backend appends after its write.
+				storage = buffer.BytesWithTailroom()
+			}
+			callbackContext = server.WithPacketStorage(callbackContext, storage)
+		}
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
 			buffer, err := packetbuf.Copy(payload)
 			if err != nil {

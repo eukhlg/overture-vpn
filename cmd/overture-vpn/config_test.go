@@ -369,3 +369,19 @@ func TestPlainUDPOffloadConfig(t *testing.T) {
 		t.Fatalf("env: %v %+v", err, c.L2TP)
 	}
 }
+
+func TestTUNBackendAndOffloadEnvironment(t *testing.T) {
+	c := defaultConfig()
+	if c.TUN.Backend != "system" || !c.TUN.Offload {
+		t.Fatal("TUN defaults")
+	}
+	t.Setenv("L2TP_TUN_BACKEND", "system")
+	t.Setenv("L2TP_TUN_OFFLOAD", "false")
+	if err := applyEnvironment(&c); err != nil || c.TUN.Offload {
+		t.Fatalf("kill switch: %v", err)
+	}
+	c.TUN.Backend = "unknown"
+	if _, _, err := c.validate(); err == nil {
+		t.Fatal("invalid backend accepted")
+	}
+}

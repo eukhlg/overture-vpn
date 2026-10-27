@@ -5,6 +5,9 @@ package tun
 import (
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/unix"
+	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -41,6 +44,9 @@ type rawSockaddrControl struct {
 }
 
 func Open(config Config) (Device, error) {
+	if err := validateBackend(config); err != nil {
+		return nil, err
+	}
 	unit, err := utunUnit(config.Name)
 	if err != nil {
 		return nil, err
@@ -100,27 +106,80 @@ func socketOptionString(fd, level, option int) (string, error) {
 func (d *nativeDevice) Name() string { return d.name }
 func (d *nativeDevice) Close() error { return d.file.Close() }
 
-func (d *nativeDevice) Read(packet []byte) (int, error) {
-	buffer := make([]byte, len(packet)+4)
-	n, err := d.file.Read(buffer)
-	if n < 4 {
+func (d *nativeDevice) BatchSize() int { return 1 }
+func (d *nativeDevice) MTU() (int, error) {
+	iface, err := net.InterfaceByName(d.name)
+	if err != nil {
 		return 0, err
 	}
-	if binary.BigEndian.Uint32(buffer[:4]) != syscall.AF_INET {
+	return iface.MTU, nil
+}
+func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if len(bufs) == 0 || len(sizes) == 0 || offset < 4 || offset > len(bufs[0]) {
+		return 0, io.ErrShortBuffer
+	}
+	b := bufs[0][offset-4:]
+	n, err := d.file.Read(b)
+	if n < 4 {
+		if err == nil {
+			err = io.ErrUnexpectedEOF
+		}
+		return 0, err
+	}
+	if binary.BigEndian.Uint32(b[:4]) != syscall.AF_INET {
 		return 0, fmt.Errorf("tun: non-IPv4 utun packet")
 	}
-	return copy(packet, buffer[4:n]), err
+	sizes[0] = n - 4
+	return 1, err
+}
+func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
+	for i, b := range bufs {
+		if offset < 0 || offset > len(b) {
+			return i, io.ErrShortBuffer
+		}
+		if offset < 4 {
+			var prefix [4]byte
+			binary.BigEndian.PutUint32(prefix[:], syscall.AF_INET)
+			if err := writeVector(d.file, [][]byte{prefix[:], b[offset:]}); err != nil {
+				return i, err
+			}
+			continue
+		}
+		binary.BigEndian.PutUint32(b[offset-4:offset], syscall.AF_INET)
+		n, err := d.file.Write(b[offset-4:])
+		if err != nil {
+			return i, err
+		}
+		if n != len(b)-offset+4 {
+			return i, io.ErrShortWrite
+		}
+	}
+	return len(bufs), nil
 }
 
-func (d *nativeDevice) Write(packet []byte) (int, error) {
-	buffer := make([]byte, len(packet)+4)
-	binary.BigEndian.PutUint32(buffer[:4], syscall.AF_INET)
-	copy(buffer[4:], packet)
-	n, err := d.file.Write(buffer)
-	if n >= 4 {
-		n -= 4
-	} else {
-		n = 0
+func writeVector(file *os.File, bufs [][]byte) error {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return err
 	}
-	return n, err
+	var result error
+	err = raw.Write(func(fd uintptr) bool {
+		n, e := unix.Writev(int(fd), bufs)
+		if e == unix.EAGAIN || e == unix.EWOULDBLOCK {
+			return false
+		}
+		result = e
+		want := 0
+		for _, b := range bufs {
+			want += len(b)
+		}
+		if e == nil && n != want {
+			result = io.ErrShortWrite
+		}
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return result
 }

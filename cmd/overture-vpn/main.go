@@ -122,7 +122,7 @@ func main() {
 	var router *tun.Router
 	var cleanup func(context.Context) error
 	if resolved.TUN.Enabled {
-		device, err := tun.Open(tun.Config{Name: resolved.TUN.Name})
+		device, err := tun.Open(tun.Config{Name: resolved.TUN.Name, Backend: resolved.TUN.Backend, MTU: resolved.Network.MTU, DisableOffload: !resolved.TUN.Offload})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -137,7 +137,11 @@ func main() {
 			log.Fatal(err)
 		}
 		s.RouteIPv4 = router.RouteIPv4
-		log.Printf("TUN routing enabled on %s (%s)", device.Name(), prefix)
+		s.RouteIPv4Owned = router.RouteIPv4Owned
+		// Room before each plain datagram for the TUN virtio header (10 bytes).
+		s.ReceiveHeadroom = 16
+		s.NewRouteBatch = router.NewRouteBatch
+		log.Printf("TUN routing enabled on %s (%s) backend=%s offload=%t requested=%t", device.Name(), prefix, resolved.TUN.Backend, router.OffloadEnabled(), resolved.TUN.Offload)
 	} else {
 		s.RouteIPv4 = func(_ context.Context, frame server.DataFrame, _ server.PacketWriter) error {
 			log.Printf("IPv4 packet ready for routing: peer=%s bytes=%d (enable -tun to forward)", frame.Peer, len(frame.IPv4))
