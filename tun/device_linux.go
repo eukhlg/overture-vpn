@@ -3,7 +3,6 @@
 package tun
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +15,12 @@ import (
 
 type systemDevice struct {
 	wgtun.Device
-	name    string
-	offload bool
-	writeMu sync.Mutex
+	name     string
+	offload  bool
+	writeMu  sync.Mutex
+	tcpTable *tcpGROTable
+	udpTable *udpGROTable
+	toWrite  []int
 }
 
 func (d *systemDevice) Name() string { return d.name }
@@ -40,38 +42,48 @@ func (d *systemDevice) Write(bufs [][]byte, offset int) (int, error) {
 		return len(bufs), nil
 	}
 	if offset < 10 {
-		return 0, io.ErrShortBuffer
-	}
-	// Leave non-TCP traffic uncoalesced, including UDP. Separate contiguous
-	// TCP runs preserve the position of all excluded packets in the batch.
-	for start := 0; start < len(bufs); {
-		end := start + 1
-		if tcpCandidate(bufs[start][offset:]) {
-			for end < len(bufs) && tcpCandidate(bufs[end][offset:]) {
-				end++
+		for i, b := range bufs {
+			var prefix [10]byte
+			if err := writeVector(d.Device.File(), [][]byte{prefix[:], b[offset:]}); err != nil {
+				return i, err
 			}
 		}
-		if _, err := d.Device.Write(bufs[start:end], offset); err != nil {
-			return start, err
+		return len(bufs), nil
+	}
+	if d.tcpTable == nil {
+		d.tcpTable = newTCPGROTable()
+		d.udpTable = newUDPGROTable()
+	}
+	defer d.tcpTable.reset()
+	defer d.udpTable.reset()
+	d.toWrite = d.toWrite[:0]
+	if err := handleGRO(bufs, offset, d.tcpTable, d.udpTable, false, &d.toWrite); err != nil {
+		return 0, err
+	}
+	for _, i := range d.toWrite {
+		b := bufs[i][offset-virtioNetHdrLen:]
+		n, err := d.Device.File().Write(b)
+		if err != nil {
+			return 0, err
 		}
-		start = end
+		if n != len(b) {
+			return 0, io.ErrShortWrite
+		}
 	}
 	return len(bufs), nil
 }
-func tcpCandidate(p []byte) bool {
-	if len(p) < 20 || p[0]>>4 != 4 || p[9] != 6 {
-		return false
-	}
-	return binary.BigEndian.Uint16(p[6:8])&0x3fff == 0
-}
+
 func (d *systemDevice) OffloadEnabled() bool { return d.offload }
 
 func Open(config Config) (Device, error) {
 	if err := validateBackend(config); err != nil {
 		return nil, err
 	}
+	return openWithFallback(config, openSystem)
+}
+func openWithFallback(config Config, open func(Config, bool) (Device, error)) (Device, error) {
 	if !config.DisableOffload {
-		device, err := openSystem(config, true)
+		device, err := open(config, true)
 		if err == nil {
 			return device, nil
 		}
@@ -81,7 +93,7 @@ func Open(config Config) (Device, error) {
 			return nil, err
 		}
 	}
-	return openSystem(config, false)
+	return open(config, false)
 }
 func openSystem(config Config, offload bool) (Device, error) {
 	fd, err := unix.Open("/dev/net/tun", unix.O_RDWR|unix.O_CLOEXEC, 0)
@@ -144,4 +156,31 @@ func (d *systemDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 		return 0, err
 	}
 	return handleVirtioRead(in[:n], bufs, sizes, offset)
+}
+
+func writeVector(file *os.File, bufs [][]byte) error {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var result error
+	err = raw.Write(func(fd uintptr) bool {
+		n, e := unix.Writev(int(fd), bufs)
+		if e == unix.EAGAIN || e == unix.EWOULDBLOCK {
+			return false
+		}
+		result = e
+		want := 0
+		for _, b := range bufs {
+			want += len(b)
+		}
+		if e == nil && n != want {
+			result = io.ErrShortWrite
+		}
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return result
 }

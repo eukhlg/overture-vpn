@@ -16,11 +16,10 @@ import (
 )
 
 const (
-	ipv4SrcAddrOffset      = 12
-	ipv6SrcAddrOffset      = 8
-	tcpFlagFIN        byte = 1
-	tcpFlagPSH        byte = 8
-	tcpFlagsOffset         = 13
+	tcpFlagACK     byte = 16
+	tcpFlagFIN     byte = 1
+	tcpFlagPSH     byte = 8
+	tcpFlagsOffset      = 13
 )
 
 type virtioNetHdr struct {
@@ -129,7 +128,15 @@ func handleVirtioRead(in []byte, bufs [][]byte, sizes []int, offset int) (int, e
 		return 0, fmt.Errorf("end of checksum offset (%d) exceeds packet length (%d)", cSumAt+1, len(in))
 	}
 
-	return gsoSplit(in, hdr, bufs, sizes, offset, ipVersion == 6)
+	n, err := gsoSplit(in, hdr, bufs, sizes, offset, ipVersion == 6)
+	// The first output aliases the receive buffer. Its pool owner will expose
+	// only sizes[0], so erase the rest of the original super-packet now, after
+	// every later segment has been copied out. Otherwise those bytes would be
+	// returned to the pool without being recorded as dirty.
+	if err == nil && n > 0 && sizes[0] < len(in) {
+		clear(in[sizes[0]:])
+	}
+	return n, err
 }
 
 func gsoSplit(in []byte, hdr virtioNetHdr, outBuffs [][]byte, sizes []int, outOffset int, isV6 bool) (int, error) {

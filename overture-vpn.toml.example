@@ -24,6 +24,7 @@ mtu = 1400
 
 [tun]
 backend = "system" # L2TP_TUN_BACKEND
+offload = true # L2TP_TUN_OFFLOAD; Linux VNET_HDR, with runtime fallback
 enabled = true
 name = "l2tp0"
 

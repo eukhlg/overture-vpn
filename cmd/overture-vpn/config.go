@@ -40,6 +40,7 @@ type appConfig struct {
 	} `toml:"network"`
 	TUN struct {
 		Backend string `toml:"backend"`
+		Offload bool   `toml:"offload"`
 		Enabled bool   `toml:"enabled"`
 		Name    string `toml:"name"`
 	} `toml:"tun"`
@@ -97,6 +98,7 @@ func defaultConfig() appConfig {
 	c.Network.ClientPoolSize, c.Network.DNS, c.Network.MTU = 50, "1.1.1.1", 1400
 	c.TUN.Name = ""
 	c.TUN.Backend = "system"
+	c.TUN.Offload = true
 	c.NAT.Enabled = true
 	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
 	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
@@ -206,6 +208,9 @@ func applyEnvironment(c *appConfig) error {
 	}
 	overrideString("L2TP_TUN_NAME", &c.TUN.Name)
 	overrideString("L2TP_TUN_BACKEND", &c.TUN.Backend)
+	if err := overrideBool("L2TP_TUN_OFFLOAD", &c.TUN.Offload); err != nil {
+		return err
+	}
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}

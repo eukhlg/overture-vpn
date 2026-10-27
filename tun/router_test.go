@@ -245,3 +245,42 @@ func TestOwnedUploadBatchReferencesAndDriverIsolation(t *testing.T) {
 		t.Fatal("idle flush repeated packets")
 	}
 }
+
+type directReadDevice struct {
+	*memoryDevice
+	packet []byte
+	view   []byte
+}
+
+func (d *directReadDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	if d.packet == nil {
+		return d.memoryDevice.Read(bufs, sizes, offset)
+	}
+	sizes[0] = copy(bufs[0][offset:], d.packet)
+	d.view = bufs[0][offset : offset+sizes[0]]
+	d.packet = nil
+	return 1, nil
+}
+func TestRouterRunTransfersTheReadBuffer(t *testing.T) {
+	p := ipv4Packet([4]byte{8, 8, 8, 8}, [4]byte{10, 0, 0, 2})
+	d := &directReadDevice{memoryDevice: newMemoryDevice(), packet: p}
+	r, _ := NewRouter(d)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	called := false
+	r.BindOwned(netip.MustParseAddr("10.0.0.2"), func(b *packetbuf.Buffer) error {
+		called = true
+		if &b.Bytes()[0] != &d.view[0] || b.Headroom() != packetbuf.Headroom {
+			t.Error("read packet copied or headroom changed")
+		}
+		b.Release()
+		cancel()
+		return nil
+	})
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("packet not dispatched")
+	}
+}

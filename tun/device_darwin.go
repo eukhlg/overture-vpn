@@ -5,6 +5,7 @@ package tun
 import (
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"net"
 	"os"
@@ -133,8 +134,16 @@ func (d *nativeDevice) Read(bufs [][]byte, sizes []int, offset int) (int, error)
 }
 func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
 	for i, b := range bufs {
-		if offset < 4 || offset > len(b) {
+		if offset < 0 || offset > len(b) {
 			return i, io.ErrShortBuffer
+		}
+		if offset < 4 {
+			var prefix [4]byte
+			binary.BigEndian.PutUint32(prefix[:], syscall.AF_INET)
+			if err := writeVector(d.file, [][]byte{prefix[:], b[offset:]}); err != nil {
+				return i, err
+			}
+			continue
 		}
 		binary.BigEndian.PutUint32(b[offset-4:offset], syscall.AF_INET)
 		n, err := d.file.Write(b[offset-4:])
@@ -146,4 +155,31 @@ func (d *nativeDevice) Write(bufs [][]byte, offset int) (int, error) {
 		}
 	}
 	return len(bufs), nil
+}
+
+func writeVector(file *os.File, bufs [][]byte) error {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var result error
+	err = raw.Write(func(fd uintptr) bool {
+		n, e := unix.Writev(int(fd), bufs)
+		if e == unix.EAGAIN || e == unix.EWOULDBLOCK {
+			return false
+		}
+		result = e
+		want := 0
+		for _, b := range bufs {
+			want += len(b)
+		}
+		if e == nil && n != want {
+			result = io.ErrShortWrite
+		}
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return result
 }
