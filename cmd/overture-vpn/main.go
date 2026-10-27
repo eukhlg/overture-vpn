@@ -138,6 +138,8 @@ func main() {
 		}
 		s.RouteIPv4 = router.RouteIPv4
 		s.RouteIPv4Owned = router.RouteIPv4Owned
+		// Room before each plain datagram for the TUN virtio header (10 bytes).
+		s.ReceiveHeadroom = 16
 		s.NewRouteBatch = router.NewRouteBatch
 		log.Printf("TUN routing enabled on %s (%s) backend=%s offload=%t requested=%t", device.Name(), prefix, resolved.TUN.Backend, router.OffloadEnabled(), resolved.TUN.Offload)
 	} else {
