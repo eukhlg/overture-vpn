@@ -204,3 +204,44 @@ func TestProtectedRouteCannotBindAfterSessionClose(t *testing.T) {
 		t.Fatal("closed protected session published a route or TUN write")
 	}
 }
+
+func TestOwnedUploadBatchReferencesAndDriverIsolation(t *testing.T) {
+	d := newMemoryDevice()
+	r, _ := NewRouter(d)
+	ctx, flush := r.NewRouteBatch(context.Background())
+	other, flushOther := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	a, b := make([]byte, 16+len(p)), make([]byte, 24+len(p))
+	copy(a[16:], p)
+	copy(b[24:], p)
+	for i, s := range [][]byte{a, b} {
+		off := 16 + i*8
+		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: s[off:]}, s, off, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(d.written) != 0 {
+		t.Fatal("wrote before flush")
+	}
+	if err := flushOther(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 0 {
+		t.Fatal("driver state shared")
+	}
+	_ = other
+	// The batch keeps references: changing the original bytes changes the write.
+	a[16+8] = 42
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 2 || d.written[0][8] != 42 {
+		t.Fatal("packet copied or batch lost")
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.written) != 2 {
+		t.Fatal("idle flush repeated packets")
+	}
+}

@@ -62,18 +62,11 @@ type bindingGuardKey struct{}
 
 // RouteIPv4 implements server.IPv4Router.
 func (r *Router) RouteIPv4(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
-	source, _, err := packetAddresses(frame.IPv4)
-	if err != nil {
+	accepted, err := r.learn(ctx, frame, send)
+	if err != nil || !accepted {
 		return err
 	}
-	bind := func() { r.mu.Lock(); r.routes[source] = send; r.mu.Unlock() }
-	if guard, ok := ctx.Value(bindingGuardKey{}).(func(func()) bool); ok {
-		if !guard(bind) {
-			return nil
-		}
-	} else {
-		bind()
-	}
+
 	r.writeMu.Lock()
 	_, err = r.device.Write([][]byte{frame.IPv4}, 0)
 	r.writeMu.Unlock()
@@ -167,4 +160,75 @@ func packetAddresses(packet []byte) (netip.Addr, netip.Addr, error) {
 		return netip.Addr{}, netip.Addr{}, ErrInvalidPacket
 	}
 	return netip.AddrFrom4([4]byte(packet[12:16])), netip.AddrFrom4([4]byte(packet[16:20])), nil
+}
+
+func (r *Router) learn(ctx context.Context, frame server.DataFrame, send server.PacketWriter) (bool, error) {
+	source, _, err := packetAddresses(frame.IPv4)
+	if err != nil {
+		return false, err
+	}
+	bind := func() { r.mu.Lock(); r.routes[source] = send; r.mu.Unlock() }
+	if guard, ok := ctx.Value(bindingGuardKey{}).(func(func()) bool); ok {
+		if !guard(bind) {
+			return false, nil
+		}
+	} else {
+		bind()
+	}
+	return true, nil
+}
+
+type routeBatchKey struct{}
+type routeBatch struct {
+	router *Router
+	bufs   [][]byte
+	offset int
+}
+
+// NewRouteBatch allocates independent state for one synchronous delivery driver.
+// No references may outlive flush; the driver owns and releases all storage.
+func (r *Router) NewRouteBatch(ctx context.Context) (context.Context, func() error) {
+	batch := &routeBatch{router: r, bufs: make([][]byte, 0, 128)}
+	return context.WithValue(ctx, routeBatchKey{}, batch), batch.flush
+}
+func (b *routeBatch) flush() error {
+	if len(b.bufs) == 0 {
+		return nil
+	}
+	b.router.writeMu.Lock()
+	_, err := b.router.device.Write(b.bufs, b.offset)
+	b.router.writeMu.Unlock()
+	clear(b.bufs)
+	b.bufs = b.bufs[:0]
+	return err
+}
+
+// RouteIPv4Owned retains only slice references until the driver flushes.
+func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, storage []byte, offset int, send server.PacketWriter) error {
+	accepted, err := r.learn(ctx, frame, send)
+	if err != nil || !accepted {
+		return err
+	}
+	if offset < 0 || offset > len(storage) || len(frame.IPv4) > len(storage)-offset {
+		return ErrInvalidPacket
+	}
+	// Rebase the slice so all packets have the same headroom despite different
+	// ESP/L2TP header lengths. Spare tail capacity remains available to GRO.
+	headroom := min(offset, 16)
+	packet := storage[offset-headroom : offset+len(frame.IPv4)]
+	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
+	if batch == nil || batch.router != r {
+		r.writeMu.Lock()
+		_, err = r.device.Write([][]byte{packet}, headroom)
+		r.writeMu.Unlock()
+		return err
+	}
+	if len(batch.bufs) > 0 && (batch.offset != headroom || len(batch.bufs) == cap(batch.bufs)) {
+		if err := batch.flush(); err != nil {
+			return err
+		}
+	}
+	batch.offset = headroom
+	batch.bufs = append(batch.bufs, packet)
+	return nil
 }

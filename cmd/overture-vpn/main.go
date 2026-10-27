@@ -137,6 +137,8 @@ func main() {
 			log.Fatal(err)
 		}
 		s.RouteIPv4 = router.RouteIPv4
+		s.RouteIPv4Owned = router.RouteIPv4Owned
+		s.NewRouteBatch = router.NewRouteBatch
 		log.Printf("TUN routing enabled on %s (%s)", device.Name(), prefix)
 	} else {
 		s.RouteIPv4 = func(_ context.Context, frame server.DataFrame, _ server.PacketWriter) error {
