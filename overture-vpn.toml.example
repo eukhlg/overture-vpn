@@ -50,10 +50,10 @@ udp_gso = true
 # Bytes per NAT-T/raw ESP receive socket; 0 keeps the kernel default.
 # L2TP_IPSEC_RECEIVE_BUFFER overrides this value. Linux reports 2x the request.
 # Larger buffers reduce drops and can improve throughput, at the cost of more
-# queueing delay under saturation. VPS at batch 128: loaded p95 was 2.48 ms
-# at kernel default, 4.39 ms at 256 KiB, and 11.94 ms at 1 MiB.
-# 256 KiB is the smallest tested positive request; use 0 for lower loaded delay.
-receive_buffer = 262144
+# queueing delay under saturation. VPS, batch 128, 256 KiB -> 1 MiB: upload
+# +6% (1 stream) / +18% (4 streams); loaded upload ping p50 at 4 streams
+# 2.3 -> 6.8 ms. Use 262144 or 0 when lower loaded delay matters more.
+receive_buffer = 1048576
 # NAT-T receive batch size, 1..256; L2TP_IPSEC_UDP_BATCH.
 # 128 gained 3.3% geometric-mean throughput in the VPS matrix, using more RX storage.
 udp_batch = 128
