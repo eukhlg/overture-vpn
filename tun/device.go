@@ -22,6 +22,8 @@ type Device interface {
 	// Read fills packet buffers starting at offset and reports packet lengths.
 	Read(bufs [][]byte, sizes []int, offset int) (int, error)
 	// Write consumes packets beginning at offset; buffers remain caller-owned.
+	// With write offload, GRO may grow entries in place into spare capacity and
+	// swap entries; Router zeroes the grown bytes after Write returns.
 	Write(bufs [][]byte, offset int) (int, error)
 	BatchSize() int
 	MTU() (int, error)

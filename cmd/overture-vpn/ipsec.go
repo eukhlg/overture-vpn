@@ -164,12 +164,13 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			if _, err := buffer.Prepend(buffer.Headroom()); err != nil {
 				return err
 			}
+			storage := buffer.Bytes()
 			if router != nil && router.OffloadEnabled() {
-				if _, err := buffer.Append(buffer.Tailroom()); err != nil {
-					return err
-				}
+				// Spare capacity for GRO without marking the slot dirty; the
+				// router zeroes whatever the backend appends after its write.
+				storage = buffer.BytesWithTailroom()
 			}
-			callbackContext = server.WithPacketStorage(callbackContext, buffer.Bytes())
+			callbackContext = server.WithPacketStorage(callbackContext, storage)
 		}
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
 			buffer, err := packetbuf.Copy(payload)

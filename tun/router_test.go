@@ -284,3 +284,50 @@ func TestRouterRunTransfersTheReadBuffer(t *testing.T) {
 		t.Fatal("packet not dispatched")
 	}
 }
+
+// growDevice mimics GRO: it grows the first entry into spare capacity by the
+// second entry's packet, then swaps the two entries like the prepend path.
+type growDevice struct{ *memoryDevice }
+
+func (d *growDevice) Write(bufs [][]byte, offset int) (int, error) {
+	if len(bufs) >= 2 {
+		bufs[0] = append(bufs[0], bufs[1][offset:]...)
+		bufs[0], bufs[1] = bufs[1], bufs[0]
+	}
+	return len(bufs), nil
+}
+
+func TestOwnedBatchScrubsOffloadGrowthWithoutDirtyingSlots(t *testing.T) {
+	d := &growDevice{newMemoryDevice()}
+	r, _ := NewRouter(d)
+	ctx, flush := r.NewRouteBatch(context.Background())
+	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
+	var buffers []*packetbuf.Buffer
+	var full [][]byte
+	for i := 0; i < 2; i++ {
+		b, err := packetbuf.Acquire(32 + len(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		storage := b.BytesWithTailroom()
+		copy(storage[32:], p)
+		full = append(full, storage[:cap(storage)])
+		buffers = append(buffers, b)
+		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[32:]}, storage, 32, func([]byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := flush(); err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range full {
+		for j := 32 + len(p); j < len(f); j++ {
+			if f[j] != 0 {
+				t.Fatalf("buffer %d byte %d not zero after flush", i, j)
+			}
+		}
+	}
+	for _, b := range buffers {
+		b.Release()
+	}
+}

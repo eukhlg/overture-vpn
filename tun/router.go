@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/netip"
 	"sync"
+	"unsafe"
 
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/packetbuf"
@@ -222,7 +223,15 @@ type routeBatchKey struct{}
 type routeBatch struct {
 	router *Router
 	bufs   [][]byte
+	spans  []span
 	offset int
+}
+
+// span identifies a packet's storage by address so growth can be found after
+// GRO swaps bufs entries.
+type span struct {
+	data *byte
+	n    int
 }
 
 // NewRouteBatch allocates independent state for one synchronous delivery driver.
@@ -235,9 +244,15 @@ func (b *routeBatch) flush() error {
 	if len(b.bufs) == 0 {
 		return nil
 	}
+	b.spans = b.spans[:0]
+	for _, p := range b.bufs {
+		b.spans = append(b.spans, span{unsafe.SliceData(p), len(p)})
+	}
 	b.router.writeMu.Lock()
 	_, err := b.router.device.Write(b.bufs, b.offset)
 	b.router.writeMu.Unlock()
+	scrubGrowth(b.bufs, b.spans)
+	clear(b.spans)
 	clear(b.bufs)
 	b.bufs = b.bufs[:0]
 	return err
@@ -258,9 +273,11 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 	packet := storage[offset-headroom : offset+len(frame.IPv4)]
 	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
 	if batch == nil || batch.router != r {
+		bufs, spans := [][]byte{packet}, []span{{unsafe.SliceData(packet), len(packet)}}
 		r.writeMu.Lock()
-		_, err = r.device.Write([][]byte{packet}, headroom)
+		_, err = r.device.Write(bufs, headroom)
 		r.writeMu.Unlock()
+		scrubGrowth(bufs, spans)
 		return err
 	}
 	if len(batch.bufs) > 0 && (batch.offset != headroom || len(batch.bufs) == cap(batch.bufs)) {
@@ -276,4 +293,30 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 func (r *Router) OffloadEnabled() bool {
 	d, ok := r.device.(interface{ OffloadEnabled() bool })
 	return ok && d.OffloadEnabled()
+}
+
+// scrubGrowth zeroes bytes a write-offload backend appended beyond each
+// packet's original end. Owners record only the original packet as written, so
+// this restores their invariant that unrecorded storage is zero, without
+// marking whole slots dirty. Entries are matched by storage address because GRO
+// swaps entries when it prepends. Growth that reallocated has a new address and
+// left the owner's storage untouched. Runs after every Write, including errors.
+func scrubGrowth(bufs [][]byte, spans []span) {
+	for i, p := range bufs {
+		data := unsafe.SliceData(p)
+		n := -1
+		if i < len(spans) && spans[i].data == data {
+			n = spans[i].n
+		} else {
+			for _, s := range spans {
+				if s.data == data {
+					n = s.n
+					break
+				}
+			}
+		}
+		if n >= 0 && len(p) > n {
+			clear(p[n:])
+		}
+	}
 }

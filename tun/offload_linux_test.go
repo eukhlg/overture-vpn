@@ -158,3 +158,44 @@ func TestOffloadFallbackAndKillSwitch(t *testing.T) {
 		t.Fatal("unexpected permission fallback")
 	}
 }
+
+// GRO grows packets into spare capacity; scrubGrowth must zero exactly the
+// grown bytes, including after the prepend path swaps bufs entries.
+func TestScrubGrowthAfterRealGRO(t *testing.T) {
+	for name, seqs := range map[string][]uint32{"append": {0, 100, 200}, "prepend": {100, 0}} {
+		t.Run(name, func(t *testing.T) {
+			var bufs [][]byte
+			for _, seq := range seqs {
+				bufs = append(bufs, tcpTestPacket(seq, 100, 1))
+			}
+			storage := make([][]byte, len(bufs))
+			spans := make([]span, len(bufs))
+			for i, b := range bufs {
+				storage[i] = b[:cap(b)]
+				spans[i] = span{&b[0], len(b)}
+			}
+			if indices := groTest(t, bufs); len(indices) != 1 {
+				t.Fatalf("writes=%d", len(indices))
+			}
+			grew := false
+			for _, b := range bufs {
+				for _, s := range spans {
+					if s.data == &b[0] && len(b) > s.n {
+						grew = true
+					}
+				}
+			}
+			if !grew {
+				t.Fatal("GRO did not grow any packet in place")
+			}
+			scrubGrowth(bufs, spans)
+			for i, full := range storage {
+				for j := spans[i].n; j < len(full); j++ {
+					if full[j] != 0 {
+						t.Fatalf("storage %d byte %d (packet len %d) not zero after scrub", i, j, spans[i].n)
+					}
+				}
+			}
+		})
+	}
+}
