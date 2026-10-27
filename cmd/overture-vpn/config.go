@@ -39,10 +39,11 @@ type appConfig struct {
 		MTU             int    `toml:"mtu"`
 	} `toml:"network"`
 	TUN struct {
-		Backend string `toml:"backend"`
-		Offload bool   `toml:"offload"`
-		Enabled bool   `toml:"enabled"`
-		Name    string `toml:"name"`
+		Backend       string `toml:"backend"`
+		Offload       bool   `toml:"offload"`
+		TxQueueLength int    `toml:"tx_queue_length"`
+		Enabled       bool   `toml:"enabled"`
+		Name          string `toml:"name"`
 	} `toml:"tun"`
 	NAT struct {
 		Enabled   bool   `toml:"enabled"`
@@ -218,6 +219,9 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideBool("L2TP_TUN_OFFLOAD", &c.TUN.Offload); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_TUN_TX_QUEUE_LENGTH", &c.TUN.TxQueueLength); err != nil {
+		return err
+	}
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}
@@ -281,6 +285,9 @@ func applyEnvironment(c *appConfig) error {
 func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	if c.TUN.Backend != "system" {
 		return networkConfig{}, nil, fmt.Errorf("unsupported TUN backend %q (want system)", c.TUN.Backend)
+	}
+	if c.TUN.TxQueueLength < 0 || c.TUN.TxQueueLength > 65535 {
+		return networkConfig{}, nil, fmt.Errorf("tun.tx_queue_length must be between 0 and 65535")
 	}
 	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")

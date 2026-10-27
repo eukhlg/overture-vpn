@@ -15,7 +15,7 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
-		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME",
+		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME", "L2TP_TUN_OFFLOAD", "L2TP_TUN_TX_QUEUE_LENGTH",
 		"L2TP_NAT_ENABLED", "L2TP_NAT_INTERFACE", "L2TP_MAX_SESSIONS",
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
@@ -383,6 +383,33 @@ func TestTUNBackendAndOffloadEnvironment(t *testing.T) {
 	c.TUN.Backend = "unknown"
 	if _, _, err := c.validate(); err == nil {
 		t.Fatal("invalid backend accepted")
+	}
+}
+
+func TestTUNTxQueueLengthConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || c.TUN.TxQueueLength != 0 {
+		t.Fatalf("default: %d %v", c.TUN.TxQueueLength, err)
+	}
+	path := writeConfig(t, "[tun]\ntx_queue_length = 128\n")
+	c, err = loadConfig(path)
+	if err != nil || c.TUN.TxQueueLength != 128 {
+		t.Fatalf("file: %d %v", c.TUN.TxQueueLength, err)
+	}
+	t.Setenv("L2TP_TUN_TX_QUEUE_LENGTH", "32")
+	c, err = loadConfig(path)
+	if err != nil || c.TUN.TxQueueLength != 32 {
+		t.Fatalf("environment: %d %v", c.TUN.TxQueueLength, err)
+	}
+	for _, value := range []int{-1, 0, 1, 64, 65535, 65536} {
+		c := defaultConfig()
+		c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+		c.TUN.TxQueueLength = value
+		valid := value >= 0 && value <= 65535
+		if _, _, err := c.validate(); (err == nil) != valid {
+			t.Fatalf("tx_queue_length=%d valid=%v err=%v", value, valid, err)
+		}
 	}
 }
 

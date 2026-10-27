@@ -301,6 +301,17 @@ forwards client packets into it, reads return packets, and sends those packets
 back through the matching PPP session. It brings the interface down during a
 clean shutdown.
 
+`[tun].tx_queue_length` (`L2TP_TUN_TX_QUEUE_LENGTH`, Linux) sets the
+interface transmit queue, which the TUN driver uses as its ring of packets
+waiting for the server to read. `0` (default) selects 64 when offload is
+active and keeps the kernel setting (usually 500) otherwise. With offload each
+entry can hold a 64 KB super-packet, and the driver drops at a full ring rather
+than pushing back into the qdisc, so a long ring holds TCP's excess window as
+download delay that no qdisc can manage. In the `download-path-2026-10-27` VPS
+run, 64 entries cut loaded download ping p50 from 9.6 to 5.2 ms (one stream)
+and from 37.8 to 4.0 ms (four streams) at unchanged throughput. Startup logs
+the effective length.
+
 Native execution does not modify host IP forwarding or NAT. Configure those
 with the host firewall/router policy appropriate for the machine. The Docker
 entrypoint performs container-local NAT when `[nat].enabled = true`.

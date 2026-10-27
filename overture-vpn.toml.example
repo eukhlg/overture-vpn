@@ -25,6 +25,10 @@ mtu = 1400
 [tun]
 backend = "system" # L2TP_TUN_BACKEND
 offload = true # L2TP_TUN_OFFLOAD; Linux VNET_HDR, with runtime fallback
+# Linux TUN transmit ring (txqueuelen); L2TP_TUN_TX_QUEUE_LENGTH, 0..65535.
+# 0 = automatic: 64 with offload active, kernel setting otherwise. Shorter
+# rings bound download queueing delay; offload makes each entry up to 64 KB.
+tx_queue_length = 0
 enabled = true
 name = "l2tp0"
 
