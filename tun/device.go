@@ -9,6 +9,8 @@ import (
 var ErrUnsupported = errors.New("tun: unsupported operating system")
 
 type Config struct {
+	Backend string
+
 	// Name requests an interface name. Linux accepts names such as "l2tp0".
 	// macOS accepts an explicit "utunN" or an empty name for automatic choice.
 	Name string
@@ -23,4 +25,11 @@ type Device interface {
 	MTU() (int, error)
 	Close() error
 	Name() string
+}
+
+func validateBackend(config Config) error {
+	if config.Backend != "" && config.Backend != "system" {
+		return errors.New("tun: unsupported backend: " + config.Backend)
+	}
+	return nil
 }

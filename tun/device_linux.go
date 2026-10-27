@@ -24,6 +24,9 @@ type nativeDevice struct {
 }
 
 func Open(config Config) (Device, error) {
+	if err := validateBackend(config); err != nil {
+		return nil, err
+	}
 	file, err := os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("tun: open /dev/net/tun: %w", err)

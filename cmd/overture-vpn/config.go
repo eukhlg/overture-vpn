@@ -39,6 +39,7 @@ type appConfig struct {
 		MTU             int    `toml:"mtu"`
 	} `toml:"network"`
 	TUN struct {
+		Backend string `toml:"backend"`
 		Enabled bool   `toml:"enabled"`
 		Name    string `toml:"name"`
 	} `toml:"tun"`
@@ -95,6 +96,7 @@ func defaultConfig() appConfig {
 	c.Network.Subnet, c.Network.ServerAddress, c.Network.ClientPoolStart = "10.0.0.0/24", "1", "2"
 	c.Network.ClientPoolSize, c.Network.DNS, c.Network.MTU = 50, "1.1.1.1", 1400
 	c.TUN.Name = ""
+	c.TUN.Backend = "system"
 	c.NAT.Enabled = true
 	c.IPsec.IKEListen, c.IPsec.NATTListen, c.IPsec.ESPListen, c.IPsec.MaxSAs = ":500", ":4500", "0.0.0.0", 1024
 	c.IPsec.IKELifetime, c.IPsec.ESPLifetime, c.IPsec.DPDInterval = "8h", "1h", "20s"
@@ -203,6 +205,7 @@ func applyEnvironment(c *appConfig) error {
 		return err
 	}
 	overrideString("L2TP_TUN_NAME", &c.TUN.Name)
+	overrideString("L2TP_TUN_BACKEND", &c.TUN.Backend)
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}
@@ -264,6 +267,9 @@ func applyEnvironment(c *appConfig) error {
 }
 
 func (c appConfig) validate() (networkConfig, map[string]string, error) {
+	if c.TUN.Backend != "system" {
+		return networkConfig{}, nil, fmt.Errorf("unsupported TUN backend %q (want system)", c.TUN.Backend)
+	}
 	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")
 	}

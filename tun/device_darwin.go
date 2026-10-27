@@ -43,6 +43,9 @@ type rawSockaddrControl struct {
 }
 
 func Open(config Config) (Device, error) {
+	if err := validateBackend(config); err != nil {
+		return nil, err
+	}
 	unit, err := utunUnit(config.Name)
 	if err != nil {
 		return nil, err
