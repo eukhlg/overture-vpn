@@ -39,10 +39,11 @@ type appConfig struct {
 		MTU             int    `toml:"mtu"`
 	} `toml:"network"`
 	TUN struct {
-		Backend string `toml:"backend"`
-		Offload bool   `toml:"offload"`
-		Enabled bool   `toml:"enabled"`
-		Name    string `toml:"name"`
+		Backend       string `toml:"backend"`
+		Offload       bool   `toml:"offload"`
+		TxQueueLength int    `toml:"tx_queue_length"`
+		Enabled       bool   `toml:"enabled"`
+		Name          string `toml:"name"`
 	} `toml:"tun"`
 	NAT struct {
 		Enabled   bool   `toml:"enabled"`
@@ -113,7 +114,10 @@ func defaultConfig() appConfig {
 	c.L2TP.ReceiveBuffer, c.L2TP.UDPBatch = 1024*1024, 128
 	c.IPsec.UDPGSO = true
 	c.IPsec.UDPSendBatch = 128
-	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 256*1024, 128
+	// Measured in download-queue-2026-10-27: 512 KiB (1 MiB effective) gains
+	// 5.3% (P1) / 13.9% (P4) NAT-T upload over 256 KiB, 76-84% of the 1 MiB
+	// gain, at 3.9 instead of 6.8 ms loaded upload ping p50 (P4).
+	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 512*1024, 128
 	c.IPsec.ReplayWindowSize = ipsec.DefaultInboundReplayWindowSize
 	c.Limits.Sessions, c.Limits.SessionsPerTunnel, c.Limits.SessionsPerUser = 50, 1, 1
 	c.Limits.NewTunnelsPerSecond, c.Limits.NewTunnelBurst = 5, 10
@@ -218,6 +222,9 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideBool("L2TP_TUN_OFFLOAD", &c.TUN.Offload); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_TUN_TX_QUEUE_LENGTH", &c.TUN.TxQueueLength); err != nil {
+		return err
+	}
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}
@@ -281,6 +288,9 @@ func applyEnvironment(c *appConfig) error {
 func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	if c.TUN.Backend != "system" {
 		return networkConfig{}, nil, fmt.Errorf("unsupported TUN backend %q (want system)", c.TUN.Backend)
+	}
+	if c.TUN.TxQueueLength < 0 || c.TUN.TxQueueLength > 65535 {
+		return networkConfig{}, nil, fmt.Errorf("tun.tx_queue_length must be between 0 and 65535")
 	}
 	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")

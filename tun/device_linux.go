@@ -79,7 +79,68 @@ func Open(config Config) (Device, error) {
 	if err := validateBackend(config); err != nil {
 		return nil, err
 	}
-	return openWithFallback(config, openSystem)
+	if config.TxQueueLength < 0 {
+		return nil, errors.New("tun: negative tx queue length")
+	}
+	device, err := openWithFallback(config, openSystem)
+	if err != nil {
+		return nil, err
+	}
+	d, ok := device.(*systemDevice)
+	if !ok {
+		return device, nil
+	}
+	if n := txQueueLength(config.TxQueueLength, d.offload); n > 0 {
+		if err := setTxQueueLength(d.name, n); err != nil {
+			d.Close()
+			return nil, fmt.Errorf("tun: set tx queue length %d on %s: %w", n, d.name, err)
+		}
+	}
+	return d, nil
+}
+
+// txQueueLength returns the queue length to apply, or 0 to keep the kernel's.
+func txQueueLength(requested int, offload bool) int {
+	if requested > 0 {
+		return requested
+	}
+	if offload {
+		return DefaultOffloadTxQueueLength
+	}
+	return 0
+}
+
+func setTxQueueLength(name string, n int) error {
+	return withIfreq(name, func(fd int, request *unix.Ifreq) error {
+		request.SetUint32(uint32(n))
+		return unix.IoctlIfreq(fd, unix.SIOCSIFTXQLEN, request)
+	})
+}
+
+// TxQueueLength reports the interface's current transmit queue length.
+func (d *systemDevice) TxQueueLength() (int, error) {
+	var n int
+	err := withIfreq(d.name, func(fd int, request *unix.Ifreq) error {
+		if err := unix.IoctlIfreq(fd, unix.SIOCGIFTXQLEN, request); err != nil {
+			return err
+		}
+		n = int(request.Uint32())
+		return nil
+	})
+	return n, err
+}
+
+func withIfreq(name string, f func(int, *unix.Ifreq) error) error {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	request, err := unix.NewIfreq(name)
+	if err != nil {
+		return err
+	}
+	return f(fd, request)
 }
 func openWithFallback(config Config, open func(Config, bool) (Device, error)) (Device, error) {
 	if !config.DisableOffload {

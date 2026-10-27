@@ -8,10 +8,27 @@ import (
 
 var ErrUnsupported = errors.New("tun: unsupported operating system")
 
+// DefaultOffloadTxQueueLength bounds the TUN transmit ring when offload is
+// active. Ring entries are then super-packets (~40 KB on average in
+// download-path-2026-10-27), so the kernel default of 500 lets TCP park
+// megabytes of window there: download ping 9.6 ms (P1) / 37.8 ms (P4).
+// The TUN driver drops at a full ring instead of pushing back into the
+// qdisc, so a qdisc cannot bound this queue. In the download-queue-2026-10-27
+// sweep (16/32/64/128/500), 32 was the knee: download ping p50 2.0 / 1.6 ms
+// plain and 3.7 / 2.6 ms NAT-T (500: 10.2 / 37.6 and 20.6 / 67.8 ms) for
+// 0-6% less download throughput; 16 starts dropping upload-direction ACKs.
+const DefaultOffloadTxQueueLength = 32
+
 type Config struct {
 	MTU            int
 	DisableOffload bool
 	Backend        string
+
+	// TxQueueLength sets the Linux interface transmit queue (txqueuelen),
+	// which the TUN driver uses as its packet ring toward the reader. Zero
+	// selects DefaultOffloadTxQueueLength when offload is active and keeps the
+	// kernel setting otherwise. Ignored on macOS.
+	TxQueueLength int
 
 	// Name requests an interface name. Linux accepts names such as "l2tp0".
 	// macOS accepts an explicit "utunN" or an empty name for automatic choice.

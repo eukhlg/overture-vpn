@@ -199,3 +199,23 @@ func TestScrubGrowthAfterRealGRO(t *testing.T) {
 		})
 	}
 }
+
+func TestTxQueueLengthSelection(t *testing.T) {
+	for _, test := range []struct {
+		requested int
+		offload   bool
+		want      int
+	}{
+		{0, true, DefaultOffloadTxQueueLength},
+		{0, false, 0},
+		{16, true, 16},
+		{1000, false, 1000},
+	} {
+		if got := txQueueLength(test.requested, test.offload); got != test.want {
+			t.Fatalf("txQueueLength(%d, %t) = %d, want %d", test.requested, test.offload, got, test.want)
+		}
+	}
+	if _, err := Open(Config{TxQueueLength: -1}); err == nil {
+		t.Fatal("negative tx queue length accepted")
+	}
+}
