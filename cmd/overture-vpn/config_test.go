@@ -294,12 +294,12 @@ func TestIPsecSocketConfig(t *testing.T) {
 func TestL2TPSocketConfig(t *testing.T) {
 	clearConfigEnvironment(t)
 	c, err := loadConfig("")
-	if err != nil || c.L2TP.ReceiveBuffer != 0 || c.L2TP.UDPBatch != 32 {
+	if err != nil || c.L2TP.ReceiveBuffer != 1048576 || c.L2TP.UDPBatch != 128 {
 		t.Fatalf("defaults: %+v %v", c.L2TP, err)
 	}
-	path := writeConfig(t, "[l2tp]\nreceive_buffer=1048576\nudp_batch=128\n")
+	path := writeConfig(t, "[l2tp]\nreceive_buffer=0\nudp_batch=32\n")
 	c, err = loadConfig(path)
-	if err != nil || c.L2TP.ReceiveBuffer != 1048576 || c.L2TP.UDPBatch != 128 {
+	if err != nil || c.L2TP.ReceiveBuffer != 0 || c.L2TP.UDPBatch != 32 {
 		t.Fatalf("config: %+v %v", c.L2TP, err)
 	}
 	t.Setenv("L2TP_RECEIVE_BUFFER", "262144")

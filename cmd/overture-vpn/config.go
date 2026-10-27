@@ -108,7 +108,9 @@ func defaultConfig() appConfig {
 	c.receiveWorkersSource = "automatic default"
 	c.L2TP.Pipeline = true
 	c.L2TP.UDPGSO = true
-	c.L2TP.UDPBatch = udptransport.DefaultBatchSize
+	// Measured in plain-pipeline-2026-10-27: with the pipeline, a 1 MiB buffer
+	// removes upload loss (2 MiB effective) and batch 128 beats 32.
+	c.L2TP.ReceiveBuffer, c.L2TP.UDPBatch = 1024*1024, 128
 	c.IPsec.UDPGSO = true
 	c.IPsec.UDPSendBatch = 128
 	c.IPsec.ReceiveBuffer, c.IPsec.UDPBatch = 256*1024, 128

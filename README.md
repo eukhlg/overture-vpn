@@ -162,7 +162,11 @@ socket reads. Session identity and route bindings are checked again at flush.
 
 The plain UDP/1701 listener has independent `[l2tp].receive_buffer`
 (`L2TP_RECEIVE_BUFFER`) and `[l2tp].udp_batch` (`L2TP_UDP_BATCH`) settings,
-with defaults 0 (kernel receive buffer) and 32. The same size limits and
+with defaults 1048576 (1 MiB requested; Linux reports 2 MiB effective) and 128;
+0 keeps the kernel receive buffer. With the receive pipeline, plain upload in the
+`plain-pipeline-2026-10-27` VPS run rose from about 1.9 to 3.2 Gbit/s (P1) as
+upload drops disappeared, while loaded upload ping p95 rose from 0.97 to 1.75 ms.
+The same size limits and
 startup logging apply. `[l2tp].udp_gso` (`L2TP_UDP_GSO`, default true) controls
 send segmentation for reverse ACKs and download on this listener. These options also affect UDP/1701 when IPsec is enabled.
 
