@@ -163,56 +163,61 @@ func TestAdapterSenderFailureWakesReceiverAndReleases(t *testing.T) {
 }
 
 func TestAdapterControlHandshakeAndGracefulStop(t *testing.T) {
-	for _, batchSize := range []int{1, 32, 128} {
-		t.Run(fmt.Sprint(batchSize), func(t *testing.T) {
-			socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
-			if err != nil {
-				t.Fatal(err)
-			}
-			transport, _ := New(socket, batchSize)
-			defer transport.Close()
-			s, _ := server.New(transport, server.Config{HostName: "server", FirstTunnelID: 10})
-			s.BorrowedReceive = true
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			done := make(chan error, 1)
-			go func() { done <- s.Serve(ctx) }()
-			client, err := net.DialUDP("udp4", nil, socket.LocalAddr().(*net.UDPAddr))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer client.Close()
-			channel := l2tp.NewControlChannel(0, 1)
-			wire, _ := channel.Queue(l2tp.ControlMessage{Type: l2tp.SCCRQ, AVPs: []l2tp.AVP{l2tp.Uint16AVP(l2tp.AttrProtocolVersion, 0x0100, true), l2tp.Uint32AVP(l2tp.AttrFramingCap, 1, true), l2tp.StringAVP(l2tp.AttrHostName, "client", true), l2tp.Uint16AVP(l2tp.AttrAssignedTunnelID, 20, true)}}, time.Now())
-			if _, err := client.Write(wire); err != nil {
-				t.Fatal(err)
-			}
-			client.SetReadDeadline(time.Now().Add(2 * time.Second))
-			buf := make([]byte, 2048)
-			n, err := client.Read(buf)
-			if err != nil {
-				t.Fatal(err)
-			}
-			message, err := channel.Receive(buf[:n])
-			if err != nil || message == nil || message.Type != l2tp.SCCRP {
-				t.Fatalf("reply=%v err=%v", message, err)
-			}
-			cancel()
-			n, err = client.Read(buf)
-			if err != nil {
-				t.Fatal(err)
-			}
-			message, err = channel.Receive(buf[:n])
-			if err != nil || message == nil || message.Type != l2tp.StopCCN {
-				t.Fatalf("stop=%v err=%v", message, err)
-			}
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("cancelled server stuck")
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			for _, batchSize := range []int{1, 32, 128} {
+				t.Run(fmt.Sprint(batchSize), func(t *testing.T) {
+					socket, err := net.ListenPacket("udp4", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					transport, _ := New(socket, batchSize)
+					defer transport.Close()
+					s, _ := server.New(transport, server.Config{HostName: "server", FirstTunnelID: 10})
+					s.BorrowedReceive = true
+					s.ReceivePipeline = pipeline
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					done := make(chan error, 1)
+					go func() { done <- s.Serve(ctx) }()
+					client, err := net.DialUDP("udp4", nil, socket.LocalAddr().(*net.UDPAddr))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer client.Close()
+					channel := l2tp.NewControlChannel(0, 1)
+					wire, _ := channel.Queue(l2tp.ControlMessage{Type: l2tp.SCCRQ, AVPs: []l2tp.AVP{l2tp.Uint16AVP(l2tp.AttrProtocolVersion, 0x0100, true), l2tp.Uint32AVP(l2tp.AttrFramingCap, 1, true), l2tp.StringAVP(l2tp.AttrHostName, "client", true), l2tp.Uint16AVP(l2tp.AttrAssignedTunnelID, 20, true)}}, time.Now())
+					if _, err := client.Write(wire); err != nil {
+						t.Fatal(err)
+					}
+					client.SetReadDeadline(time.Now().Add(2 * time.Second))
+					buf := make([]byte, 2048)
+					n, err := client.Read(buf)
+					if err != nil {
+						t.Fatal(err)
+					}
+					message, err := channel.Receive(buf[:n])
+					if err != nil || message == nil || message.Type != l2tp.SCCRP {
+						t.Fatalf("reply=%v err=%v", message, err)
+					}
+					cancel()
+					n, err = client.Read(buf)
+					if err != nil {
+						t.Fatal(err)
+					}
+					message, err = channel.Receive(buf[:n])
+					if err != nil || message == nil || message.Type != l2tp.StopCCN {
+						t.Fatalf("stop=%v err=%v", message, err)
+					}
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(2 * time.Second):
+						t.Fatal("cancelled server stuck")
+					}
+				})
 			}
 		})
 	}

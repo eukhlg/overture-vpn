@@ -118,6 +118,8 @@ func main() {
 	}
 	// Callbacks get borrowed views of plain's pooled receive buffers (see server.BorrowedReceive).
 	s.BorrowedReceive = true
+	s.ReceivePipeline = resolved.L2TP.Pipeline
+	log.Printf("plain L2TP receive pipeline=%t", s.ReceivePipeline)
 	defer s.Close()
 	var router *tun.Router
 	var cleanup func(context.Context) error
@@ -136,8 +138,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		s.RouteIPv4 = router.RouteIPv4
-		s.RouteIPv4Owned = router.RouteIPv4Owned
+		s.RouteIPv4 = func(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
+			return router.RouteIPv4(plainRouteContext(ctx, s.Engine, frame), frame, send)
+		}
+		s.RouteIPv4Owned = func(ctx context.Context, frame server.DataFrame, storage []byte, offset int, send server.PacketWriter) error {
+			return router.RouteIPv4Owned(plainRouteContext(ctx, s.Engine, frame), frame, storage, offset, send)
+		}
 		// Room before each plain datagram for the TUN virtio header (10 bytes).
 		s.ReceiveHeadroom = 16
 		s.NewRouteBatch = router.NewRouteBatch

@@ -29,17 +29,21 @@ type Router struct {
 	writeMu     sync.Mutex
 	routes      map[netip.Addr]SendIPv4
 	ownedRoutes map[netip.Addr]func(*packetbuf.Buffer) error
+	bindings    map[netip.Addr]uint64
+	nextBinding uint64
 }
 
 func NewRouter(device Device) (*Router, error) {
 	if device == nil {
 		return nil, errors.New("tun: device is required")
 	}
-	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error)}, nil
+	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64)}, nil
 }
 
 func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 	r.mu.Lock()
+	r.nextBinding++
+	r.bindings[address] = r.nextBinding
 	r.routes[address] = send
 	delete(r.ownedRoutes, address)
 	r.mu.Unlock()
@@ -49,13 +53,24 @@ func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 // I/O and routing remain unchanged; only return-packet storage is transferred.
 func (r *Router) BindOwned(address netip.Addr, send func(*packetbuf.Buffer) error) {
 	r.mu.Lock()
+	r.nextBinding++
+	r.bindings[address] = r.nextBinding
 	r.ownedRoutes[address] = send
 	r.mu.Unlock()
 }
 
-// WithBindingGuard checks a protected session at the instant a route is learned.
+// WithBindingGuard checks session identity at enqueue and delivery. Existing
+// transport guards are composed with the new guard, in registration order.
 // The guard must execute f synchronously and must not retain it.
 func WithBindingGuard(ctx context.Context, guard func(func()) bool) context.Context {
+	if previous, ok := ctx.Value(bindingGuardKey{}).(func(func()) bool); ok && previous != nil {
+		next := guard
+		guard = func(f func()) bool {
+			accepted := false
+			previous(func() { accepted = next(f) })
+			return accepted
+		}
+	}
 	return context.WithValue(ctx, bindingGuardKey{}, guard)
 }
 
@@ -63,14 +78,16 @@ type bindingGuardKey struct{}
 
 // RouteIPv4 implements server.IPv4Router.
 func (r *Router) RouteIPv4(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
-	accepted, err := r.learn(ctx, frame, send)
-	if err != nil || !accepted {
+	accept, err := r.prepare(ctx, frame, send)
+	if err != nil || accept == nil {
 		return err
 	}
-
 	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
+	if !accept() {
+		return nil
+	}
 	_, err = r.device.Write([][]byte{frame.IPv4}, 0)
-	r.writeMu.Unlock()
 	return err
 }
 
@@ -188,6 +205,7 @@ func (r *Router) Forget(address netip.Addr) {
 	r.mu.Lock()
 	delete(r.routes, address)
 	delete(r.ownedRoutes, address)
+	delete(r.bindings, address)
 	r.mu.Unlock()
 }
 
@@ -203,28 +221,72 @@ func packetAddresses(packet []byte) (netip.Addr, netip.Addr, error) {
 	return netip.AddrFrom4([4]byte(packet[12:16])), netip.AddrFrom4([4]byte(packet[16:20])), nil
 }
 
-func (r *Router) learn(ctx context.Context, frame server.DataFrame, send server.PacketWriter) (bool, error) {
+// prepare captures both session eligibility and the address binding generation.
+// Publication is deferred to flush for owned packets, so a queued packet cannot
+// resurrect a forgotten route or overwrite a newer client's binding.
+func (r *Router) prepare(ctx context.Context, frame server.DataFrame, send server.PacketWriter) (func() bool, error) {
 	source, _, err := packetAddresses(frame.IPv4)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	bind := func() { r.mu.Lock(); r.routes[source] = send; r.mu.Unlock() }
-	if guard, ok := ctx.Value(bindingGuardKey{}).(func(func()) bool); ok {
-		if !guard(bind) {
-			return false, nil
+	guard, _ := ctx.Value(bindingGuardKey{}).(func(func()) bool)
+	var generation uint64
+	capture := func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		var exists bool
+		generation, exists = r.bindings[source]
+		if !exists {
+			r.nextBinding++
+			generation = r.nextBinding
+			r.bindings[source] = generation
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, nil
+	}
+	if guard != nil {
+		if !guard(capture) {
+			return nil, nil
 		}
 	} else {
-		bind()
+		capture()
 	}
-	return true, nil
+	return func() bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		accepted := false
+		bind := func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.bindings[source] == generation {
+				r.routes[source] = send
+				accepted = true
+			}
+		}
+		if guard != nil {
+			guard(bind)
+		} else {
+			bind()
+		}
+		return accepted
+	}, nil
 }
 
 type routeBatchKey struct{}
 type routeBatch struct {
-	router *Router
-	bufs   [][]byte
-	spans  []span
+	router  *Router
+	bufs    [][]byte
+	spans   []span
+	offset  int
+	pending []routePacket
+}
+
+type routePacket struct {
+	packet []byte
 	offset int
+	accept func() bool
 }
 
 // span identifies a packet's storage by address so growth can be found after
@@ -234,13 +296,37 @@ type span struct {
 	n    int
 }
 
-// NewRouteBatch allocates independent state for one synchronous delivery driver.
+// NewRouteBatch allocates independent state for one delivery batch.
+// The producer stops using it before transferring it to the flush consumer.
 // No references may outlive flush; the driver owns and releases all storage.
 func (r *Router) NewRouteBatch(ctx context.Context) (context.Context, func() error) {
 	batch := &routeBatch{router: r, bufs: make([][]byte, 0, 128)}
 	return context.WithValue(ctx, routeBatchKey{}, batch), batch.flush
 }
 func (b *routeBatch) flush() error {
+	// Serialise delivery, then recheck each packet at admission to this write.
+	// Guards protect only short route publication, never blocking device I/O.
+	b.router.writeMu.Lock()
+	defer b.router.writeMu.Unlock()
+	defer func() { clear(b.pending); b.pending = b.pending[:0] }()
+	for _, p := range b.pending {
+		if len(b.bufs) > 0 && (b.offset != p.offset || len(b.bufs) == 128) {
+			if err := b.write(); err != nil {
+				return err
+			}
+		}
+		if !p.accept() {
+			continue
+		}
+		b.offset = p.offset
+		b.bufs = append(b.bufs, p.packet)
+	}
+	return b.write()
+}
+
+// write runs only in the flush stage with writeMu held. GRO may reorder and
+// extend packets, so scrub all original spans before their owners release them.
+func (b *routeBatch) write() error {
 	if len(b.bufs) == 0 {
 		return nil
 	}
@@ -248,9 +334,7 @@ func (b *routeBatch) flush() error {
 	for _, p := range b.bufs {
 		b.spans = append(b.spans, span{unsafe.SliceData(p), len(p)})
 	}
-	b.router.writeMu.Lock()
 	_, err := b.router.device.Write(b.bufs, b.offset)
-	b.router.writeMu.Unlock()
 	scrubGrowth(b.bufs, b.spans)
 	clear(b.spans)
 	clear(b.bufs)
@@ -260,33 +344,23 @@ func (b *routeBatch) flush() error {
 
 // RouteIPv4Owned retains only slice references until the driver flushes.
 func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, storage []byte, offset int, send server.PacketWriter) error {
-	accepted, err := r.learn(ctx, frame, send)
-	if err != nil || !accepted {
-		return err
-	}
 	if offset < 0 || offset > len(storage) || len(frame.IPv4) > len(storage)-offset {
 		return ErrInvalidPacket
 	}
-	// Rebase the slice so all packets have the same headroom despite different
-	// ESP/L2TP header lengths. Spare tail capacity remains available to GRO.
+	accept, err := r.prepare(ctx, frame, send)
+	if err != nil || accept == nil {
+		return err
+	}
+	// Rebase without copying: all plain packets reserve the same TUN headroom.
 	headroom := min(offset, 16)
 	packet := storage[offset-headroom : offset+len(frame.IPv4)]
 	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
 	if batch == nil || batch.router != r {
-		bufs, spans := [][]byte{packet}, []span{{unsafe.SliceData(packet), len(packet)}}
-		r.writeMu.Lock()
-		_, err = r.device.Write(bufs, headroom)
-		r.writeMu.Unlock()
-		scrubGrowth(bufs, spans)
-		return err
+		batch = &routeBatch{router: r}
+		batch.pending = append(batch.pending, routePacket{packet, headroom, accept})
+		return batch.flush()
 	}
-	if len(batch.bufs) > 0 && (batch.offset != headroom || len(batch.bufs) == cap(batch.bufs)) {
-		if err := batch.flush(); err != nil {
-			return err
-		}
-	}
-	batch.offset = headroom
-	batch.bufs = append(batch.bufs, packet)
+	batch.pending = append(batch.pending, routePacket{packet, headroom, accept})
 	return nil
 }
 
