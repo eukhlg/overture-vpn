@@ -469,9 +469,8 @@ func TestPlainSendShardsConfig(t *testing.T) {
 
 func TestUploadEgressShardConfig(t *testing.T) {
 	clearConfigEnvironment(t)
-	automatic := defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c, err := loadConfig("")
-	if err != nil || c.writeShards() != automatic || c.deliveryWorkers() != automatic {
+	if err != nil || c.writeShards() != defaultWriteShards(runtime.GOMAXPROCS(0)) || c.deliveryWorkers() != 1 {
 		t.Fatalf("default: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
 	}
 	path := writeConfig(t, "[tun]\nwrite_shards = 3\n[ipsec]\ndelivery_workers = 2\n")
@@ -523,5 +522,13 @@ func TestSealWorkersAutomaticAndExplicitOverrides(t *testing.T) {
 	c.IPsec.SealWorkers = 65
 	if _, _, err := c.validate(); err == nil {
 		t.Fatal("65 seal workers accepted")
+	}
+}
+
+func TestDefaultWriteShards(t *testing.T) {
+	for procs, want := range map[int]int{0: 1, 1: 1, 2: 2, 3: 3, 4: 4, 6: 4, 64: 4} {
+		if got := defaultWriteShards(procs); got != want {
+			t.Fatalf("defaultWriteShards(%d)=%d, want %d", procs, got, want)
+		}
 	}
 }

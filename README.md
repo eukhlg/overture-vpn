@@ -149,9 +149,10 @@ many goroutines for the stage after ESP decryption and replay commit, which
 hands upload packets to the router. Data packets go to the worker of their
 inner IPv4 flow, so one flow keeps its order while different flows reach the
 TUN writers in parallel; session events (open, close, PPP control) wait for
-all earlier packets and run before any later one. `0` (default) selects
-`clamp(GOMAXPROCS/3, 1, 4)`; `1` keeps one delivery goroutine. Startup logs
-the effective count.
+all earlier packets and run before any later one. `0` (default) and `1` keep
+one delivery goroutine: in the `upload-egress-2026-10-28` VPS run more workers
+did not raise NAT-T upload, which was not limited by delivery, and four cost
+5%. Startup logs the effective count.
 
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
 buffer in bytes for each NAT-T and raw ESP listener. The default is 524288
@@ -348,8 +349,11 @@ has its own duplicate of the TUN descriptor (Go serializes writes per
 descriptor; the kernel handles each TUN write in the caller's context) and its
 own offload coalescing state. Packets are assigned by inner IPv4 flow, the same
 hash as `send_shards`, so a flow keeps its order and its coalescing. `0`
-(default) selects `clamp(GOMAXPROCS/3, 1, 4)`; `1` keeps one writer. Startup
-logs the effective count.
+(default) selects `clamp(GOMAXPROCS, 1, 4)`; `1` keeps one writer. In the
+`upload-egress-2026-10-28` VPS run (6 vCPUs) four writers raised plain upload
+at four streams by 9.1% over one (+3.5% over two) and cut loaded upload ping
+p50 from 2.6 to 2.1 ms; one stream is unchanged. Startup logs the effective
+count.
 
 Native execution does not modify host IP forwarding or NAT. Configure those
 with the host firewall/router policy appropriate for the machine. The Docker

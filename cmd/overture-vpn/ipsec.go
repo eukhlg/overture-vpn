@@ -111,7 +111,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	}
 	workers := config.deliveryWorkers()
 	raw.DeliveryWorkers, natt.DeliveryWorkers = workers, workers
-	log.Printf("IPsec ESP delivery workers=%d requested=%d (0 = automatic)", workers, config.IPsec.DeliveryWorkers)
+	log.Printf("IPsec ESP delivery workers=%d requested=%d (0 = one)", workers, config.IPsec.DeliveryWorkers)
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {

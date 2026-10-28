@@ -177,19 +177,28 @@ func (c appConfig) writeShards() int {
 	if c.TUN.WriteShards > 0 {
 		return c.TUN.WriteShards
 	}
-	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	return defaultWriteShards(runtime.GOMAXPROCS(0))
 }
 
-// deliveryWorkers resolves ipsec.delivery_workers; 0 selects the automatic count.
+// defaultWriteShards is clamp(GOMAXPROCS, 1, 4). In upload-egress-2026-10-28
+// (6 vCPU) four writers gave plain upload P4 +9.1% over one and +3.5% over
+// the GOMAXPROCS/3 count of two; one per CPU up to four.
+func defaultWriteShards(maxProcs int) int {
+	return min(max(maxProcs, 1), 4)
+}
+
+// deliveryWorkers resolves ipsec.delivery_workers; 0 selects one worker. In
+// upload-egress-2026-10-28 more workers did not raise NAT-T upload (delivery
+// was not the limit) and four cost 5%.
 func (c appConfig) deliveryWorkers() int {
 	if c.IPsec.DeliveryWorkers > 0 {
 		return c.IPsec.DeliveryWorkers
 	}
-	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	return 1
 }
 
-// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards, TUN
-// write shards and ESP delivery workers use the same automatic count.
+// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards use
+// the same automatic count.
 func defaultReceiveWorkers(maxProcs int) int {
 	workers := maxProcs / 3
 	if workers < 1 {
