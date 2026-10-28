@@ -13,6 +13,7 @@ import (
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/netio/udptransport"
+	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -70,6 +71,7 @@ type appConfig struct {
 		MaxSAs           int    `toml:"max_sas"`
 		ForceNATT        bool   `toml:"force_natt"`
 		ReceiveWorkers   int    `toml:"receive_workers"`
+		SealWorkers      int    `toml:"seal_workers"`
 		ReplayWindowSize int    `toml:"replay_window_size"`
 		IKELifetime      string `toml:"ike_lifetime"`
 		ESPLifetime      string `toml:"esp_lifetime"`
@@ -85,6 +87,7 @@ type appConfig struct {
 		NewTunnelBurst      int     `toml:"new_tunnel_burst"`
 	} `toml:"limits"`
 	receiveWorkersSource string
+	sealWorkersSource    string
 }
 
 type networkConfig struct {
@@ -108,6 +111,8 @@ func defaultConfig() appConfig {
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
+	c.IPsec.SealWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	c.sealWorkersSource = "automatic default"
 	c.L2TP.Pipeline = true
 	c.L2TP.UDPGSO = true
 	// Measured in plain-pipeline-2026-10-27: with the pipeline, a 1 MiB buffer
@@ -138,6 +143,7 @@ func loadConfig(path string) (appConfig, error) {
 		var explicit struct {
 			IPsec struct {
 				ReceiveWorkers *int `toml:"receive_workers"`
+				SealWorkers    *int `toml:"seal_workers"`
 			} `toml:"ipsec"`
 		}
 		if err := toml.NewDecoder(bytes.NewReader(data)).Decode(&explicit); err != nil {
@@ -145,6 +151,9 @@ func loadConfig(path string) (appConfig, error) {
 		}
 		if explicit.IPsec.ReceiveWorkers != nil {
 			c.receiveWorkersSource = "config"
+		}
+		if explicit.IPsec.SealWorkers != nil {
+			c.sealWorkersSource = "config"
 		}
 	}
 	if err := applyEnvironment(&c); err != nil {
@@ -275,6 +284,12 @@ func applyEnvironment(c *appConfig) error {
 		}
 		c.receiveWorkersSource = "environment"
 	}
+	if _, ok := lookupNonempty("L2TP_IPSEC_SEAL_WORKERS"); ok {
+		if err := overrideInt("L2TP_IPSEC_SEAL_WORKERS", &c.IPsec.SealWorkers); err != nil {
+			return err
+		}
+		c.sealWorkersSource = "environment"
+	}
 	if err := overrideInt("L2TP_IPSEC_REPLAY_WINDOW_SIZE", &c.IPsec.ReplayWindowSize); err != nil {
 		return err
 	}
@@ -351,6 +366,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.IPsec.ReceiveWorkers < 0 || c.IPsec.ReceiveWorkers > ipsec.ESPReceiveCapacity {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.receive_workers must be between 0 and %d", ipsec.ESPReceiveCapacity)
+	}
+	if c.IPsec.SealWorkers < 0 || c.IPsec.SealWorkers > l2tpipsec.SealCapacity {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.seal_workers must be between 0 and %d", l2tpipsec.SealCapacity)
 	}
 	if size := c.IPsec.ReplayWindowSize; size < esp.ReplayWindowSize || size > esp.MaxReplayWindowSize || size%64 != 0 {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.replay_window_size must be a multiple of 64 between %d and %d", esp.ReplayWindowSize, esp.MaxReplayWindowSize)

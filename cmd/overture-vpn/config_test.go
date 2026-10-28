@@ -20,7 +20,7 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
 		"L2TP_IPSEC_PSK", "L2TP_IPSEC_SERVER_ID", "L2TP_IPSEC_MAX_SAS",
-		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_RECEIVE_WORKERS", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
+		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_RECEIVE_WORKERS", "L2TP_IPSEC_SEAL_WORKERS", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
 	} {
 		t.Setenv(name, "")
 	}
@@ -464,5 +464,33 @@ func TestPlainSendShardsConfig(t *testing.T) {
 		if _, _, err := c.validate(); (err == nil) != valid {
 			t.Fatalf("send_shards=%d valid=%v err=%v", value, valid, err)
 		}
+	}
+}
+
+func TestSealWorkersAutomaticAndExplicitOverrides(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := defaultReceiveWorkers(runtime.GOMAXPROCS(0)); c.IPsec.SealWorkers != want || c.sealWorkersSource != "automatic default" {
+		t.Fatalf("automatic seal workers=%d source=%q", c.IPsec.SealWorkers, c.sealWorkersSource)
+	}
+	path := writeConfig(t, "[[authentication.users]]\nusername = \"vpn\"\npassword = \"secret\"\n\n[ipsec]\nseal_workers = 0\n")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.SealWorkers != 0 || c.sealWorkersSource != "config" {
+		t.Fatalf("config seal workers=%d source=%q err=%v", c.IPsec.SealWorkers, c.sealWorkersSource, err)
+	}
+	if _, _, err := c.validate(); err != nil {
+		t.Fatalf("serial config rejected: %v", err)
+	}
+	t.Setenv("L2TP_IPSEC_SEAL_WORKERS", "3")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.SealWorkers != 3 || c.sealWorkersSource != "environment" {
+		t.Fatalf("environment seal workers=%d source=%q err=%v", c.IPsec.SealWorkers, c.sealWorkersSource, err)
+	}
+	c.IPsec.SealWorkers = 65
+	if _, _, err := c.validate(); err == nil {
+		t.Fatal("65 seal workers accepted")
 	}
 }

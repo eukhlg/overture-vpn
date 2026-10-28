@@ -27,6 +27,7 @@ type ipsecRuntime struct {
 	control   *isakmp.ControlPlane
 	done      chan error
 	sender    *l2tpipsec.ESPSender
+	bridge    *l2tpipsec.ESPBridge
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -162,6 +163,8 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	log.Printf("NAT-T UDP GSO active=%t requested=%t send_batch=%d", sender.GSOEnabled(), config.IPsec.UDPGSO, config.IPsec.UDPSendBatch)
 	log.Print("NAT-T UDP GRO active=false")
 	bridge.Sender = sender
+	bridge.StartSealPipeline(ctx, config.IPsec.SealWorkers)
+	log.Printf("IPsec ESP seal workers=%d source=%s (0 or 1 = serial)", config.IPsec.SealWorkers, config.sealWorkersSource)
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		if !tun.SetBindingGuard(callbackContext, result.WithActive) {
 			callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
@@ -200,8 +203,14 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		if err == nil && router != nil && result.L2TP.Opened != nil {
 			info := *result.L2TP.Opened
 			result.WithActive(func() {
+				send := func(buffer *packetbuf.Buffer) error {
+					return bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+				}
+				if framer, err := l2tpServer.Engine.SessionFramer(info.TunnelID, info.SessionID); err == nil {
+					send = func(buffer *packetbuf.Buffer) error { return bridge.SendFramedIPv4(framer, buffer) }
+				}
 				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
-					err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+					err := send(buffer)
 					if reason, dropped := downloadDrop(err); dropped {
 						drops.Record(info.TunnelID, info.SessionID, reason, info.Peer, err)
 						return nil
@@ -213,7 +222,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	bridge.HandleResult = handleResult
-	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, cancel: cancel}
+	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, bridge: bridge, cancel: cancel}
 	runtime.wg.Add(5)
 	serve := func(run func(context.Context) error) {
 		defer runtime.wg.Done()
@@ -269,6 +278,7 @@ func (r *ipsecRuntime) Close() {
 			_, _ = conn.WriteTo(payload, datagram.Peer)
 		}
 		r.cancel()
+		r.bridge.CloseSealPipeline()
 		r.sender.Close()
 		_ = r.ike.Close()
 		r.wg.Wait()

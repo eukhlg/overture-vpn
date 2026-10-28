@@ -136,6 +136,14 @@ on 6–8, three on 9–11, and four on 12 or more. Set `receive_workers` or
 variable overrides TOML. Values 0 and 1 select serial processing, and values
 through 64 are accepted. Startup logs the effective count and its source.
 
+`[ipsec].seal_workers` (`L2TP_IPSEC_SEAL_WORKERS`) does the same for outbound
+ESP. The TUN reader (or the delivery goroutine, for control replies) reserves
+each packet's SA sequence number, IV and padding in order; workers encrypt and
+authenticate in parallel; an ordered stage hands packets to the sender in
+reservation order, so every SA's packets leave in sequence order and never
+test the client's replay window. The default and the 0/1 serial setting
+follow `receive_workers`.
+
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
 buffer in bytes for each NAT-T and raw ESP listener. The default is 524288
 (512 KiB; Linux reports 1 MiB effective); set `0` to keep the kernel setting. Values through 1073741823 bytes

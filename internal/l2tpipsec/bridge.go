@@ -54,6 +54,43 @@ type ESPBridge struct {
 	HandleResult          func(context.Context, ESPBridgeResult) error
 	// Drops, when set, counts packets discarded at delivery and by owned sends.
 	Drops *DropCounters
+	// seals, when started, encrypts outbound ESP on workers (StartSealPipeline).
+	seals *sealPipeline
+}
+
+// StartSealPipeline seals outbound ESP on workers goroutines once Sender is
+// set, before serving. Workers 0 or 1 keep sealing on the producer. Packets
+// reach the sender in sequence order for every SA (see sealPipeline).
+func (b *ESPBridge) StartSealPipeline(ctx context.Context, workers int) {
+	if workers <= 1 || b.Sender == nil {
+		return
+	}
+	b.seals = newSealPipeline(ctx, workers, b.Sender.enqueue, func(err error) {
+		if b.Debugf != nil {
+			b.Debugf("esp sealed packet dropped at enqueue error=%v", err)
+		}
+	})
+}
+
+// CloseSealPipeline stops the workers and releases packets still inside.
+func (b *ESPBridge) CloseSealPipeline() {
+	if b.seals != nil {
+		b.seals.close()
+	}
+}
+
+// send consumes seal: it seals and enqueues inline, or submits it to the
+// pipeline. Callers hold outboundMu between reservation and send.
+func (b *ESPBridge) send(association *ipsec.Association, seal ipsec.ESPSeal) error {
+	if b.seals != nil {
+		return b.seals.submit(association, seal)
+	}
+	datagram := seal.Seal()
+	err := b.Sender.Enqueue(association, datagram)
+	if err != nil {
+		datagram.Release()
+	}
+	return err
 }
 
 func NewESPBridge(engine *server.Engine, registry *ipsec.ESPRegistry) (*ESPBridge, error) {
@@ -151,6 +188,14 @@ func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, u
 	b.outboundMu.Lock()
 	defer b.outboundMu.Unlock()
 	for _, reply := range result.Replies {
+		if b.seals != nil {
+			// Replies take the same ordered path as data, so no SA sequence
+			// number overtakes another on the wire.
+			if err := b.sendUDPReply(session, peer, sourcePort, reply); err != nil {
+				return ESPBridgeResult{}, err
+			}
+			continue
+		}
 		datagram, err := b.sealUDPReply(session, peer, sourcePort, reply)
 		if err != nil {
 			if errors.Is(err, esp.ErrSALifetime) {
@@ -190,6 +235,16 @@ func (b *ESPBridge) SendIPv4Buffer(tunnelID, sessionID uint16, buffer *packetbuf
 	return b.sendL2TPBuffer(peer, buffer)
 }
 
+// SendFramedIPv4 is SendIPv4Buffer with a session framer captured at bind time,
+// so the router frames without the L2TP engine lock. It consumes buffer.
+func (b *ESPBridge) SendFramedIPv4(framer *server.SessionFramer, buffer *packetbuf.Buffer) error {
+	if err := framer.PrependIPv4(buffer); err != nil {
+		buffer.Release()
+		return err
+	}
+	return b.sendL2TPBuffer(framer.Peer(), buffer)
+}
+
 func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) error {
 	b.outboundMu.Lock()
 	defer b.outboundMu.Unlock()
@@ -205,25 +260,25 @@ func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) erro
 		buffer.Release()
 		return ipsec.ErrESPPeer
 	}
-	seal := func() (ipsec.ESPDatagram, error) {
+	reserve := func() (ipsec.ESPSeal, error) {
 		if buffer.Len() > 65535-8 {
-			return ipsec.ESPDatagram{}, packetbuf.ErrSize
+			return ipsec.ESPSeal{}, packetbuf.ErrSize
 		}
 		header, err := buffer.Prepend(8)
 		if err != nil {
-			return ipsec.ESPDatagram{}, err
+			return ipsec.ESPSeal{}, err
 		}
 		binary.BigEndian.PutUint16(header[:2], 1701)
 		binary.BigEndian.PutUint16(header[2:4], flow.clientPort)
 		binary.BigEndian.PutUint16(header[4:6], uint16(buffer.Len()))
 		clear(header[6:8])
-		datagram, err := b.Registry.SealBuffer(flow.session, flow.peer, buffer, esp.IPProtocolUDP)
+		seal, err := b.Registry.ReserveSealBuffer(flow.session, flow.peer, buffer, esp.IPProtocolUDP)
 		if err != nil {
 			_ = buffer.TrimFront(8)
 		}
-		return datagram, err
+		return seal, err
 	}
-	datagram, err := seal()
+	seal, err := reserve()
 	if errors.Is(err, esp.ErrSALifetime) {
 		b.Registry.Remove(flow.session.InboundSPI())
 	}
@@ -244,7 +299,7 @@ func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) erro
 		if !exists {
 			err = ipsec.ErrUnknownESP
 		} else if flow.session.Active() {
-			datagram, err = seal()
+			seal, err = reserve()
 		}
 	}
 
@@ -252,14 +307,12 @@ func (b *ESPBridge) sendL2TPBuffer(peer net.Addr, buffer *packetbuf.Buffer) erro
 		buffer.Release()
 		return err
 	}
-	if err = b.Sender.Enqueue(flow.session, datagram); err != nil {
-		datagram.Release()
-	}
-	return err
+	return b.send(flow.session, seal)
 }
 
 // SealL2TP returns an owned ciphertext packet for synchronous embedders.
-// Production queued traffic uses SendL2TP so enqueue cannot reorder SA sequences.
+// Production queued traffic uses SendL2TP so enqueue cannot reorder SA sequences;
+// SealL2TP must not be mixed with a running seal pipeline for the same SA.
 func (b *ESPBridge) SealL2TP(peer net.Addr, payload []byte) (ipsec.ESPDatagram, error) {
 	b.outboundMu.Lock()
 	defer b.outboundMu.Unlock()
@@ -288,6 +341,24 @@ func (b *ESPBridge) sealL2TP(peer net.Addr, payload []byte) (*ipsec.Association,
 		}
 	}
 	return flow.session, datagram, err
+}
+
+// sendUDPReply reserves a control reply in owned storage and sends it through
+// the seal pipeline. Callers hold outboundMu.
+func (b *ESPBridge) sendUDPReply(session *ipsec.Association, peer net.Addr, clientPort uint16, payload []byte) error {
+	buffer, err := packetbuf.Copy(encodeUDP(1701, clientPort, payload))
+	if err != nil {
+		return err
+	}
+	seal, err := b.Registry.ReserveSealBuffer(session, peer, buffer, esp.IPProtocolUDP)
+	if err != nil {
+		buffer.Release()
+		if errors.Is(err, esp.ErrSALifetime) {
+			b.Registry.Remove(session.InboundSPI())
+		}
+		return err
+	}
+	return b.send(session, seal)
 }
 
 func (b *ESPBridge) sealUDPReply(session *ipsec.Association, peer net.Addr, clientPort uint16, payload []byte) (ipsec.ESPDatagram, error) {
