@@ -53,11 +53,16 @@ type ESPBridge struct {
 	authenticatedActivity func(isakmp.Cookie, time.Time)
 	Tracef                func(string, ...any)
 	Debugf                func(string, ...any)
-	HandleResult          func(context.Context, ESPBridgeResult) error
+	// HandleResult must not retain the result or its Data after returning;
+	// WithActive may stay with the router as the packet's binding guard until
+	// the delivery batch flushes (see WithDeliveryBatch).
+	HandleResult func(context.Context, ESPBridgeResult) error
 	// Drops, when set, counts packets discarded at delivery and by owned sends.
 	Drops *DropCounters
 	// seals, when started, encrypts outbound ESP on workers (StartSealPipeline).
 	seals *sealPipeline
+	// dispatches recycles per-packet delivery state (espDispatch).
+	dispatches sync.Pool
 }
 
 // StartSealPipeline seals outbound ESP on workers goroutines once Sender is
@@ -153,10 +158,12 @@ func (b *ESPBridge) handle(peer net.Addr, wire []byte, now time.Time, borrowed b
 		}
 		return ESPBridgeResult{}, err
 	}
-	return b.handleDecrypted(session, peer, udp, next, now, borrowed)
+	return b.handleDecrypted(session, peer, udp, next, now, borrowed, nil)
 }
 
-func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, udp []byte, next uint8, now time.Time, borrowed bool) (ESPBridgeResult, error) {
+// handleDecrypted processes authenticated plaintext. A borrowed data packet's
+// frame is stored in frame when given.
+func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, udp []byte, next uint8, now time.Time, borrowed bool, frame *server.DataFrame) (ESPBridgeResult, error) {
 	ikeCookie := b.Registry.Cookie(session)
 	b.mu.RLock()
 	authenticatedActivity := b.authenticatedActivity
@@ -175,7 +182,7 @@ func (b *ESPBridge) handleDecrypted(session *ipsec.Association, peer net.Addr, u
 		b.Tracef("esp open peer=%s spi=%08x next_header=%d udp=%d->%d payload_bytes=%d encapsulation=%d", peer, session.InboundSPI(), next, sourcePort, destinationPort, len(payload), session.Encapsulation())
 	}
 	var eligible func() bool
-	result, err := b.handleFlow(session, peer, sourcePort, payload, now, borrowed, func(r server.Result) {
+	result, err := b.handleFlow(session, peer, sourcePort, payload, now, borrowed, frame, func(r server.Result) {
 		eligible = b.resultEligibility(r)
 	})
 	if err != nil {
@@ -388,11 +395,13 @@ func (b *ESPBridge) handlePacket(ctx context.Context, peer net.Addr, wire []byte
 // HandleDecryptedPacket receives registry-authenticated plaintext. The caller
 // owns its storage through Dispatch; flow, PPP and reply handling stay here.
 func (b *ESPBridge) HandleDecryptedPacket(ctx context.Context, session *ipsec.Association, peer net.Addr, payload []byte, next uint8, now time.Time) (ipsec.ESPPacketResult, error) {
-	result, err := b.handleDecrypted(session, peer, payload, next, now, true)
+	d := b.newDispatch()
+	result, err := b.handleDecrypted(session, peer, payload, next, now, true, &d.frame)
 	if err != nil {
+		d.recycle()
 		return ipsec.ESPPacketResult{}, err
 	}
-	return b.packetResult(result), nil
+	return b.packetResultWith(d, result), nil
 }
 
 // resultSession identifies the session whose data or binding a result carries.
@@ -419,59 +428,26 @@ func (b *ESPBridge) resultEligibility(result server.Result) func() bool {
 }
 
 func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
+	return b.packetResultWith(b.newDispatch(), result)
+}
+
+// packetResultWith hands result to d, which runs its Dispatch.
+func (b *ESPBridge) packetResultWith(d *espDispatch, result ESPBridgeResult) ipsec.ESPPacketResult {
 	out := ipsec.ESPPacketResult{Datagrams: result.Datagrams}
 	// Data of an established session runs on its flow's delivery worker;
 	// session events (open, close, control) stay ordered against everything.
 	if data := result.L2TP.Data; data != nil && len(data.IPv4) != 0 && result.L2TP.Opened == nil && len(result.L2TP.Closed) == 0 {
 		out.Flow, out.FlowValid = flowhash.IPv4(data.IPv4), true
 	}
-	if b.HandleResult != nil {
-		sessionEligible := result.eligible
-		if sessionEligible == nil {
-			sessionEligible = b.resultEligibility(result.L2TP)
-		}
-		out.Dispatch = func(ctx context.Context) error {
-			b.mu.RLock()
-			flow, exists := b.flows[result.logicalKey]
-			b.mu.RUnlock()
-			eligible, reason := true, DropReason(0)
-			switch {
-			case !exists:
-				eligible, reason = false, DropUpFlowMissing
-			case flow.session != result.association:
-				eligible, reason = false, DropUpFlowMismatch
-			case !result.association.Active():
-				eligible, reason = false, DropUpSAInactive
-			case !sessionEligible():
-				eligible, reason = false, DropUpSessionIneligible
-			}
-			// Never hold b.mu while invoking callbacks: they may send, acquiring
-			// outboundMu and then b.mu. Never acquire outboundMu with b.mu held;
-			// recursive RLock can deadlock when a writer is waiting.
-			delivered := result
-			delivered.WithActive = func(f func()) bool {
-				b.deliveryMu.RLock()
-				defer b.deliveryMu.RUnlock()
-				b.mu.RLock()
-				flow, exists := b.flows[result.logicalKey]
-				active := exists && flow.session == result.association && result.association.Active()
-				b.mu.RUnlock()
-				if !active || !sessionEligible() {
-					return false
-				}
-				f()
-				return true
-			}
-			if !eligible {
-				if tunnelID, sessionID, ok := resultSession(result.L2TP); ok {
-					b.Drops.Record(tunnelID, sessionID, reason, result.logicalKey, nil)
-				}
-				delivered.L2TP.Opened = nil
-				delivered.L2TP.Data = nil
-			}
-			return b.HandleResult(ctx, delivered)
-		}
+	if b.HandleResult == nil {
+		d.recycle()
+		return out
 	}
+	d.result, d.sessionEligible = result, result.eligible
+	if d.sessionEligible == nil {
+		d.sessionEligible = b.resultEligibility(result.L2TP)
+	}
+	out.Dispatch = d.run
 	return out
 }
 
@@ -525,7 +501,7 @@ func sameESPPeer(a, b net.Addr) bool {
 	}
 }
 
-func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port uint16, payload []byte, now time.Time, borrowed bool, capture ...func(server.Result)) (result server.Result, err error) {
+func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port uint16, payload []byte, now time.Time, borrowed bool, dataFrame *server.DataFrame, capture ...func(server.Result)) (result server.Result, err error) {
 	// Only a pure IPv4 data frame cannot close or replace a PPP session.
 	// Serialize all control/negotiation with delivery, but leave data processing
 	// concurrent with router/TUN writes.
@@ -548,9 +524,11 @@ func (b *ESPBridge) handleFlow(session *ipsec.Association, peer net.Addr, port u
 		}
 	}()
 	key := netip.AddrPortFrom(flowKey(peer).Addr(), port)
-	handle := b.Engine.HandleDatagram
-	if borrowed {
-		handle = b.Engine.HandleDatagramBorrowed
+	handle := func(peer net.Addr, payload []byte, now time.Time) (server.Result, error) {
+		if !borrowed {
+			return b.Engine.HandleDatagram(peer, payload, now)
+		}
+		return b.Engine.HandleDatagramInto(peer, payload, now, dataFrame)
 	}
 	// Hold a read lock through engine processing so CloseIKE cannot close a
 	// tunnel and then have an already authenticated packet recreate it.

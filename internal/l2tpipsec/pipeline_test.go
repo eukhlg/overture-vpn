@@ -17,6 +17,13 @@ import (
 
 func pipelineSession(t *testing.T) (*server.Engine, server.SessionInfo) {
 	t.Helper()
+	return pipelineSessionAt(t, testPeer("192.0.2.1:1701"))
+}
+
+// pipelineSessionAt establishes the session for an L2TP peer as given; the
+// ESP bridge passes its logical peers as *net.UDPAddr.
+func pipelineSessionAt(t *testing.T, peer net.Addr) (*server.Engine, server.SessionInfo) {
+	t.Helper()
 	pool, err := server.NewAddressPool(netip.MustParsePrefix("10.0.0.0/24"), netip.MustParseAddr("10.0.0.2"), netip.MustParseAddr("10.0.0.3"))
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +33,6 @@ func pipelineSession(t *testing.T) (*server.Engine, server.SessionInfo) {
 		PrimaryDNS: netip.MustParseAddr("1.1.1.1"), Authenticate: ppp.StaticCredentials("alice", "secret"),
 	}})
 	client := l2tp.NewControlChannel(0, 4)
-	peer := testPeer("192.0.2.1:1701")
 	now := time.Unix(100, 0)
 
 	sccrq := l2tp.ControlMessage{Type: l2tp.SCCRQ, AVPs: []l2tp.AVP{

@@ -103,9 +103,10 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	if router != nil {
 		// One context per delivery goroutine, with a slot for the per-packet
 		// guard, so delivering a packet allocates no context.
+		// The bridge recycles each packet's delivery state after the flush.
 		newBatch := func(ctx context.Context) (context.Context, func() error) {
 			ctx, flush := router.NewRouteBatch(ctx)
-			return tun.WithBindingGuardSlot(ctx), flush
+			return bridge.WithDeliveryBatch(tun.WithBindingGuardSlot(ctx), flush)
 		}
 		raw.NewDeliveryBatch, natt.NewDeliveryBatch = newBatch, newBatch
 	}
@@ -168,6 +169,20 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	bridge.Sender = sender
 	bridge.StartSealPipeline(ctx, config.IPsec.SealWorkers)
 	log.Printf("IPsec ESP seal workers=%d source=%s (0 or 1 = serial)", config.IPsec.SealWorkers, config.sealWorkersSource)
+	// One writer for every session: the L2TP server caches a session's
+	// writer built from it, so dispatching a packet allocates nothing.
+	writeIPv4 := func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
+		buffer, err := packetbuf.Copy(payload)
+		if err != nil {
+			return err
+		}
+		err = bridge.SendIPv4Buffer(tunnelID, sessionID, buffer)
+		if reason, dropped := downloadDrop(err); dropped {
+			drops.Record(tunnelID, sessionID, reason, peer, err)
+			return nil
+		}
+		return err
+	}
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		if !tun.SetBindingGuard(callbackContext, result.WithActive) {
 			callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
@@ -178,18 +193,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			// the router borrows it in place (see server.OwnedIPv4Router).
 			data.Buffer = ipsec.DeliveryBuffer(callbackContext)
 		}
-		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
-			buffer, err := packetbuf.Copy(payload)
-			if err != nil {
-				return err
-			}
-			err = bridge.SendIPv4Buffer(tunnelID, sessionID, buffer)
-			if reason, dropped := downloadDrop(err); dropped {
-				drops.Record(tunnelID, sessionID, reason, peer, err)
-				return nil
-			}
-			return err
-		})
+		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", writeIPv4)
 		if err == nil && router != nil && result.L2TP.Opened != nil {
 			info := *result.L2TP.Opened
 			result.WithActive(func() {

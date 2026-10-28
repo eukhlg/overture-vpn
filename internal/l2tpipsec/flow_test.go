@@ -42,7 +42,7 @@ func TestFlowPublicationAndReplacement(t *testing.T) {
 	wire := flowSCCRQ(t)
 	receive := func(s *ipsec.Association, port uint16) {
 		t.Helper()
-		if _, err := bridge.handleFlow(s, peer, port, wire, time.Now(), true); err != nil {
+		if _, err := bridge.handleFlow(s, peer, port, wire, time.Now(), true, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -79,7 +79,7 @@ func TestFlowPublicationAndReplacement(t *testing.T) {
 	}
 	registry.RemoveIKE(pair.ResponderCookie)
 	bridge.CloseIKE(pair.ResponderCookie)
-	if _, err := bridge.handleFlow(replacement, peer, 40000, wire, time.Now(), true); !errors.Is(err, ipsec.ErrUnknownESP) {
+	if _, err := bridge.handleFlow(replacement, peer, 40000, wire, time.Now(), true, nil); !errors.Is(err, ipsec.ErrUnknownESP) {
 		t.Fatalf("deleted session: %v", err)
 	}
 	if len(bridge.flows) != 0 || bridge.Engine.TunnelCount() != 0 {
