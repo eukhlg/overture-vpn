@@ -4,6 +4,7 @@
 !.env.example
 /l2tp-go.toml
 /overture-vpn.toml
+/overture-vpn.yaml*
 
 # Application binaries and build output
 /l2tp-go
