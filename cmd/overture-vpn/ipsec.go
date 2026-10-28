@@ -27,6 +27,7 @@ type ipsecRuntime struct {
 	control   *isakmp.ControlPlane
 	done      chan error
 	sender    *l2tpipsec.ESPSender
+	bridge    *l2tpipsec.ESPBridge
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -100,14 +101,17 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	raw.ReceiveWorkers, natt.ReceiveWorkers = config.IPsec.ReceiveWorkers, config.IPsec.ReceiveWorkers
 	raw.HandleDecrypted, natt.HandleDecrypted = bridge.HandleDecryptedPacket, bridge.HandleDecryptedPacket
 	if router != nil {
-		// One context per delivery goroutine, with slots for the per-packet guard
-		// and storage, so delivering a packet allocates no context.
+		// One context per delivery goroutine, with a slot for the per-packet
+		// guard, so delivering a packet allocates no context.
 		newBatch := func(ctx context.Context) (context.Context, func() error) {
 			ctx, flush := router.NewRouteBatch(ctx)
-			return server.WithPacketStorageSlot(tun.WithBindingGuardSlot(ctx)), flush
+			return tun.WithBindingGuardSlot(ctx), flush
 		}
 		raw.NewDeliveryBatch, natt.NewDeliveryBatch = newBatch, newBatch
 	}
+	workers := config.deliveryWorkers()
+	raw.DeliveryWorkers, natt.DeliveryWorkers = workers, workers
+	log.Printf("IPsec ESP delivery workers=%d requested=%d (0 = one)", workers, config.IPsec.DeliveryWorkers)
 	ike.Debugf, raw.Debugf, natt.Debugf = debugf, debugf, debugf
 	raw.Tracef, natt.Tracef = tracef, tracef
 	established := func(_ context.Context, peer net.Addr, pair isakmp.ESPPair) {
@@ -162,29 +166,18 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	log.Printf("NAT-T UDP GSO active=%t requested=%t send_batch=%d", sender.GSOEnabled(), config.IPsec.UDPGSO, config.IPsec.UDPSendBatch)
 	log.Print("NAT-T UDP GRO active=false")
 	bridge.Sender = sender
+	bridge.StartSealPipeline(ctx, config.IPsec.SealWorkers)
+	log.Printf("IPsec ESP seal workers=%d source=%s (0 or 1 = serial)", config.IPsec.SealWorkers, config.sealWorkersSource)
 	handleResult := func(callbackContext context.Context, result l2tpipsec.ESPBridgeResult) error {
 		if !tun.SetBindingGuard(callbackContext, result.WithActive) {
 			callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
 		}
 		defer tun.SetBindingGuard(callbackContext, nil)
-		var storage []byte
-		if buffer := ipsec.DeliveryBuffer(callbackContext); buffer != nil {
-			// Delivery owns the buffer until its flush hook returns. Recover the
-			// consumed receive headroom without moving any packet bytes.
-			if _, err := buffer.Prepend(buffer.Headroom()); err != nil {
-				return err
-			}
-			storage = buffer.Bytes()
-			if router != nil && router.OffloadEnabled() {
-				// Spare capacity for GRO without marking the slot dirty; the
-				// router zeroes whatever the backend appends after its write.
-				storage = buffer.BytesWithTailroom()
-			}
+		if data := result.L2TP.Data; data != nil {
+			// Delivery owns the decrypted buffer until its flush hook returns;
+			// the router borrows it in place (see server.OwnedIPv4Router).
+			data.Buffer = ipsec.DeliveryBuffer(callbackContext)
 		}
-		if !server.SetPacketStorage(callbackContext, storage) && storage != nil {
-			callbackContext = server.WithPacketStorage(callbackContext, storage)
-		}
-		defer server.SetPacketStorage(callbackContext, nil)
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
 			buffer, err := packetbuf.Copy(payload)
 			if err != nil {
@@ -200,8 +193,14 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		if err == nil && router != nil && result.L2TP.Opened != nil {
 			info := *result.L2TP.Opened
 			result.WithActive(func() {
+				send := func(buffer *packetbuf.Buffer) error {
+					return bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+				}
+				if framer, err := l2tpServer.Engine.SessionFramer(info.TunnelID, info.SessionID); err == nil {
+					send = func(buffer *packetbuf.Buffer) error { return bridge.SendFramedIPv4(framer, buffer) }
+				}
 				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
-					err := bridge.SendIPv4Buffer(info.TunnelID, info.SessionID, buffer)
+					err := send(buffer)
 					if reason, dropped := downloadDrop(err); dropped {
 						drops.Record(info.TunnelID, info.SessionID, reason, info.Peer, err)
 						return nil
@@ -213,7 +212,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	bridge.HandleResult = handleResult
-	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, cancel: cancel}
+	runtime := &ipsecRuntime{ike: ike, esp: raw, natt: natt, registry: registry, control: control, done: make(chan error, 4), sender: sender, bridge: bridge, cancel: cancel}
 	runtime.wg.Add(5)
 	serve := func(run func(context.Context) error) {
 		defer runtime.wg.Done()
@@ -269,6 +268,7 @@ func (r *ipsecRuntime) Close() {
 			_, _ = conn.WriteTo(payload, datagram.Peer)
 		}
 		r.cancel()
+		r.bridge.CloseSealPipeline()
 		r.sender.Close()
 		_ = r.ike.Close()
 		r.wg.Wait()

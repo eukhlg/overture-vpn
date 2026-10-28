@@ -16,10 +16,10 @@ import (
 	"errors"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/flowhash"
 	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/netio/udptransport"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
-	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )
 
@@ -105,12 +105,13 @@ func main() {
 		_ = conn.Close()
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.NewWithOptions(conn, resolved.L2TP.UDPBatch, udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
+	plain, err := server.NewUDPTransport(conn, resolved.L2TP.UDPBatch, resolved.sendShards(), udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
 	if err != nil {
 		conn.Close()
 		log.Fatal(err)
 	}
 	log.Printf("plain L2TP UDP GSO active=%t requested=%t", plain.GSOEnabled(), resolved.L2TP.UDPGSO)
+	log.Printf("plain L2TP send shards=%d descriptors=%d requested=%d (0 = automatic)", plain.SendShards(), plain.SendDescriptors(), resolved.L2TP.SendShards)
 	s, err := server.New(plain, serverConfig)
 	if err != nil {
 		plain.Close()
@@ -138,14 +139,16 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if _, err := router.SetWriteShards(resolved.writeShards()); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("TUN write shards=%d requested=%d (0 = automatic)", router.WriteShards(), resolved.TUN.WriteShards)
 		// Plain packets need no per-packet session guard: the Engine accepted
 		// each one for an established session in this same processing goroutine,
 		// and session close or rebind (Forget, Bind) changes the address binding
 		// generation that flush rechecks before writing or publishing a route.
 		s.RouteIPv4 = router.RouteIPv4
 		s.RouteIPv4Owned = router.RouteIPv4Owned
-		// Room before each plain datagram for the TUN virtio header (10 bytes).
-		s.ReceiveHeadroom = 16
 		s.NewRouteBatch = router.NewRouteBatch
 		log.Printf("TUN routing enabled on %s (%s) backend=%s offload=%t requested=%t", device.Name(), prefix, resolved.TUN.Backend, router.OffloadEnabled(), resolved.TUN.Offload)
 		if q, ok := device.(interface{ TxQueueLength() (int, error) }); ok {
@@ -163,9 +166,11 @@ func main() {
 		if router != nil && info.Protocol == "l2tp" {
 			router.Bind(info.Address, send)
 			if info.Protocol == "l2tp" {
-				owned := s.OwnedWriter(info.TunnelID, info.SessionID)
+				// Hash the inner flow before framing: one flow stays on one send shard.
+				// The writer consumes the buffer on every outcome (see OwnedFlowWriter).
+				owned := s.OwnedFlowWriter(info.TunnelID, info.SessionID)
 				router.BindOwned(info.Address, func(buffer *packetbuf.Buffer) error {
-					err := owned(buffer)
+					err := owned(buffer, flowhash.IPv4(buffer.Bytes()))
 					if errors.Is(err, server.ErrUnknownTunnel) || errors.Is(err, server.ErrSessionNotEstablished) {
 						return nil
 					}

@@ -11,16 +11,16 @@ import (
 func clearConfigEnvironment(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
-		"L2TP_PIPELINE", "L2TP_UDP_GSO", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
+		"L2TP_PIPELINE", "L2TP_UDP_GSO", "L2TP_SEND_SHARDS", "L2TP_IPSEC_UDP_GSO", "L2TP_IPSEC_UDP_SEND_BATCH", "L2TP_RECEIVE_BUFFER", "L2TP_UDP_BATCH", "L2TP_IPSEC_RECEIVE_BUFFER", "L2TP_IPSEC_UDP_BATCH", "OVERTURE_CONFIG", "L2TP_CONFIG", "L2TP_LISTEN", "L2TP_HOSTNAME", "L2TP_DEBUG", "L2TP_AUTH",
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
-		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME", "L2TP_TUN_OFFLOAD", "L2TP_TUN_TX_QUEUE_LENGTH",
+		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME", "L2TP_TUN_OFFLOAD", "L2TP_TUN_TX_QUEUE_LENGTH", "L2TP_TUN_WRITE_SHARDS", "L2TP_IPSEC_DELIVERY_WORKERS",
 		"L2TP_NAT_ENABLED", "L2TP_NAT_INTERFACE", "L2TP_MAX_SESSIONS",
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
 		"L2TP_IPSEC_PSK", "L2TP_IPSEC_SERVER_ID", "L2TP_IPSEC_MAX_SAS",
-		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_RECEIVE_WORKERS", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
+		"L2TP_IPSEC_FORCE_NATT", "L2TP_IPSEC_RECEIVE_WORKERS", "L2TP_IPSEC_SEAL_WORKERS", "L2TP_IPSEC_IKE_LIFETIME", "L2TP_IPSEC_ESP_LIFETIME", "L2TP_IPSEC_DPD_INTERVAL", "L2TP_IPSEC_MAX_HALF_OPEN", "L2TP_IPSEC_MAX_SA_PER_PEER",
 	} {
 		t.Setenv(name, "")
 	}
@@ -437,5 +437,98 @@ func TestPlainPipelineConfig(t *testing.T) {
 	t.Setenv("L2TP_PIPELINE", "invalid")
 	if _, err = loadConfig(""); err == nil || !strings.Contains(err.Error(), "L2TP_PIPELINE") {
 		t.Fatal(err)
+	}
+}
+
+func TestPlainSendShardsConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || c.L2TP.SendShards != 0 || c.sendShards() != defaultReceiveWorkers(runtime.GOMAXPROCS(0)) {
+		t.Fatalf("default: %d %v", c.L2TP.SendShards, err)
+	}
+	path := writeConfig(t, "[l2tp]\nsend_shards = 3\n")
+	c, err = loadConfig(path)
+	if err != nil || c.sendShards() != 3 {
+		t.Fatalf("file: %d %v", c.L2TP.SendShards, err)
+	}
+	t.Setenv("L2TP_SEND_SHARDS", "1")
+	c, err = loadConfig(path)
+	if err != nil || c.sendShards() != 1 {
+		t.Fatalf("environment: %d %v", c.L2TP.SendShards, err)
+	}
+	for _, value := range []int{-1, 0, 1, 16, 17} {
+		c := defaultConfig()
+		c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+		c.L2TP.SendShards = value
+		valid := value >= 0 && value <= 16
+		if _, _, err := c.validate(); (err == nil) != valid {
+			t.Fatalf("send_shards=%d valid=%v err=%v", value, valid, err)
+		}
+	}
+}
+
+func TestUploadEgressShardConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil || c.writeShards() != defaultWriteShards(runtime.GOMAXPROCS(0)) || c.deliveryWorkers() != 1 {
+		t.Fatalf("default: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	path := writeConfig(t, "[tun]\nwrite_shards = 3\n[ipsec]\ndelivery_workers = 2\n")
+	c, err = loadConfig(path)
+	if err != nil || c.writeShards() != 3 || c.deliveryWorkers() != 2 {
+		t.Fatalf("file: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	t.Setenv("L2TP_TUN_WRITE_SHARDS", "1")
+	t.Setenv("L2TP_IPSEC_DELIVERY_WORKERS", "4")
+	c, err = loadConfig(path)
+	if err != nil || c.writeShards() != 1 || c.deliveryWorkers() != 4 {
+		t.Fatalf("environment: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	for _, value := range []int{-1, 0, 1, 16, 17} {
+		valid := value >= 0 && value <= 16
+		for _, set := range []func(*appConfig){func(c *appConfig) { c.TUN.WriteShards = value }, func(c *appConfig) { c.IPsec.DeliveryWorkers = value }} {
+			c := defaultConfig()
+			c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+			set(&c)
+			if _, _, err := c.validate(); (err == nil) != valid {
+				t.Fatalf("value %d valid=%v err=%v", value, valid, err)
+			}
+		}
+	}
+}
+
+func TestSealWorkersAutomaticAndExplicitOverrides(t *testing.T) {
+	clearConfigEnvironment(t)
+	c, err := loadConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := defaultReceiveWorkers(runtime.GOMAXPROCS(0)); c.IPsec.SealWorkers != want || c.sealWorkersSource != "automatic default" {
+		t.Fatalf("automatic seal workers=%d source=%q", c.IPsec.SealWorkers, c.sealWorkersSource)
+	}
+	path := writeConfig(t, "[[authentication.users]]\nusername = \"vpn\"\npassword = \"secret\"\n\n[ipsec]\nseal_workers = 0\n")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.SealWorkers != 0 || c.sealWorkersSource != "config" {
+		t.Fatalf("config seal workers=%d source=%q err=%v", c.IPsec.SealWorkers, c.sealWorkersSource, err)
+	}
+	if _, _, err := c.validate(); err != nil {
+		t.Fatalf("serial config rejected: %v", err)
+	}
+	t.Setenv("L2TP_IPSEC_SEAL_WORKERS", "3")
+	c, err = loadConfig(path)
+	if err != nil || c.IPsec.SealWorkers != 3 || c.sealWorkersSource != "environment" {
+		t.Fatalf("environment seal workers=%d source=%q err=%v", c.IPsec.SealWorkers, c.sealWorkersSource, err)
+	}
+	c.IPsec.SealWorkers = 65
+	if _, _, err := c.validate(); err == nil {
+		t.Fatal("65 seal workers accepted")
+	}
+}
+
+func TestDefaultWriteShards(t *testing.T) {
+	for procs, want := range map[int]int{0: 1, 1: 1, 2: 2, 3: 3, 4: 4, 6: 4, 64: 4} {
+		if got := defaultWriteShards(procs); got != want {
+			t.Fatalf("defaultWriteShards(%d)=%d, want %d", procs, got, want)
+		}
 	}
 }

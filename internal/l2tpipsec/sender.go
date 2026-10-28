@@ -105,6 +105,12 @@ func (s *ESPSender) terminalError() error {
 // Enqueue transfers datagram ownership only on success. On error the producer
 // must release pooled storage; accepted datagrams are released by the sender.
 func (s *ESPSender) Enqueue(association *ipsec.Association, datagram ipsec.ESPDatagram) error {
+	return s.enqueue(context.Background(), association, datagram)
+}
+
+// enqueue is Enqueue that also gives up when ctx ends, for internal stages that
+// stop independently of the sender.
+func (s *ESPSender) enqueue(ctx context.Context, association *ipsec.Association, datagram ipsec.ESPDatagram) error {
 	s.submitMu.Lock()
 	defer s.submitMu.Unlock()
 	if err := s.terminalError(); err != nil {
@@ -116,6 +122,8 @@ func (s *ESPSender) Enqueue(association *ipsec.Association, datagram ipsec.ESPDa
 	select {
 	case <-s.ctx.Done():
 		return s.terminalError()
+	case <-ctx.Done():
+		return ctx.Err()
 	case s.queue <- encryptedPacket{association, datagram}:
 		return nil
 	}

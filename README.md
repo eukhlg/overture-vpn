@@ -136,6 +136,24 @@ on 6–8, three on 9–11, and four on 12 or more. Set `receive_workers` or
 variable overrides TOML. Values 0 and 1 select serial processing, and values
 through 64 are accepted. Startup logs the effective count and its source.
 
+`[ipsec].seal_workers` (`L2TP_IPSEC_SEAL_WORKERS`) does the same for outbound
+ESP. The TUN reader (or the delivery goroutine, for control replies) reserves
+each packet's SA sequence number, IV and padding in order; workers encrypt and
+authenticate in parallel; an ordered stage hands packets to the sender in
+reservation order, so every SA's packets leave in sequence order and never
+test the client's replay window. The default and the 0/1 serial setting
+follow `receive_workers`.
+
+`[ipsec].delivery_workers` (`L2TP_IPSEC_DELIVERY_WORKERS`, 0..16) runs that
+many goroutines for the stage after ESP decryption and replay commit, which
+hands upload packets to the router. Data packets go to the worker of their
+inner IPv4 flow, so one flow keeps its order while different flows reach the
+TUN writers in parallel; session events (open, close, PPP control) wait for
+all earlier packets and run before any later one. `0` (default) and `1` keep
+one delivery goroutine: in the `upload-egress-2026-10-28` VPS run more workers
+did not raise NAT-T upload, which was not limited by delivery, and four cost
+5%. Startup logs the effective count.
+
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
 buffer in bytes for each NAT-T and raw ESP listener. The default is 524288
 (512 KiB; Linux reports 1 MiB effective); set `0` to keep the kernel setting. Values through 1073741823 bytes
@@ -169,6 +187,16 @@ upload drops disappeared, while loaded upload ping p95 rose from 0.97 to 1.75 ms
 The same size limits and
 startup logging apply. `[l2tp].udp_gso` (`L2TP_UDP_GSO`, default true) controls
 send segmentation for reverse ACKs and download on this listener. These options also affect UDP/1701 when IPsec is enabled.
+
+`[l2tp].send_shards` (`L2TP_SEND_SHARDS`, 0..16) runs that many sender
+goroutines on the plain socket. The router hashes each inner IPv4 flow
+(5-tuple; 3-tuple for fragments and other protocols) before framing, so one
+flow always uses one shard and keeps its order, while the kernel send work of
+different flows runs on different CPUs. `0` (default) selects
+`clamp(GOMAXPROCS/3, 1, 4)`. A single flow uses one shard whatever the setting.
+Each shard writes through its own descriptor for the socket (a duplicate with
+the same bound address), because Go serializes writes per descriptor. Startup
+logs the effective count and the number of descriptors.
 
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,
@@ -314,6 +342,18 @@ sweep, 32 entries cut loaded download ping p50 from 10.2 to 2.0 ms (one stream)
 and from 37.6 to 1.6 ms (four streams) for plain L2TP, and from 20.6 / 67.8 to
 3.7 / 2.6 ms for NAT-T, at 0-6% less download throughput; 16 entries begin to
 drop upload-direction ACKs. Startup logs the effective length.
+
+`[tun].write_shards` (`L2TP_TUN_WRITE_SHARDS`, 0..16, Linux) splits each
+upload flush into that many TUN writers that write in parallel. Each writer
+has its own duplicate of the TUN descriptor (Go serializes writes per
+descriptor; the kernel handles each TUN write in the caller's context) and its
+own offload coalescing state. Packets are assigned by inner IPv4 flow, the same
+hash as `send_shards`, so a flow keeps its order and its coalescing. `0`
+(default) selects `clamp(GOMAXPROCS, 1, 4)`; `1` keeps one writer. In the
+`upload-egress-2026-10-28` VPS run (6 vCPUs) four writers raised plain upload
+at four streams by 9.1% over one (+3.5% over two) and cut loaded upload ping
+p50 from 2.6 to 2.1 ms; one stream is unchanged. Startup logs the effective
+count.
 
 Native execution does not modify host IP forwarding or NAT. Configure those
 with the host firewall/router policy appropriate for the machine. The Docker

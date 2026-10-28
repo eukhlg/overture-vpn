@@ -140,6 +140,17 @@ func TestPacketAddressesRejectsMalformed(t *testing.T) {
 	}
 }
 
+// ownedFrame puts packet in a pooled buffer, as a driver hands it to
+// RouteIPv4Owned: the view is the packet, with the pool's headroom before it.
+func ownedFrame(t *testing.T, packet []byte) (server.DataFrame, *packetbuf.Buffer) {
+	t.Helper()
+	b, err := packetbuf.Copy(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server.DataFrame{IPv4: b.Bytes(), Buffer: b}, b
+}
+
 func ipv4Packet(source, destination [4]byte) []byte {
 	packet := make([]byte, 20)
 	packet[0], packet[2], packet[3], packet[8] = 0x45, 0, 20, 64
@@ -212,12 +223,12 @@ func TestOwnedUploadBatchReferencesAndDriverIsolation(t *testing.T) {
 	ctx, flush := r.NewRouteBatch(context.Background())
 	other, flushOther := r.NewRouteBatch(context.Background())
 	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
-	a, b := make([]byte, 16+len(p)), make([]byte, 24+len(p))
-	copy(a[16:], p)
-	copy(b[24:], p)
-	for i, s := range [][]byte{a, b} {
-		off := 16 + i*8
-		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: s[off:]}, s, off, nil); err != nil {
+	var frames []server.DataFrame
+	for i := 0; i < 2; i++ {
+		frame, b := ownedFrame(t, p)
+		defer b.Release()
+		frames = append(frames, frame)
+		if err := r.RouteIPv4Owned(ctx, frame, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -232,7 +243,7 @@ func TestOwnedUploadBatchReferencesAndDriverIsolation(t *testing.T) {
 	}
 	_ = other
 	// The batch keeps references: changing the original bytes changes the write.
-	a[16+8] = 42
+	frames[0].IPv4[8] = 42
 	if err := flush(); err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +301,8 @@ func TestRouterRunTransfersTheReadBuffer(t *testing.T) {
 // second entry's packet, then swaps the two entries like the prepend path.
 type growDevice struct{ *memoryDevice }
 
+func (d *growDevice) OffloadEnabled() bool { return true }
+
 func (d *growDevice) Write(bufs [][]byte, offset int) (int, error) {
 	if len(bufs) >= 2 {
 		bufs[0] = append(bufs[0], bufs[1][offset:]...)
@@ -304,25 +317,25 @@ func TestOwnedBatchScrubsOffloadGrowthWithoutDirtyingSlots(t *testing.T) {
 	ctx, flush := r.NewRouteBatch(context.Background())
 	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
 	var buffers []*packetbuf.Buffer
-	var full [][]byte
 	for i := 0; i < 2; i++ {
-		b, err := packetbuf.Acquire(32 + len(p))
-		if err != nil {
-			t.Fatal(err)
-		}
-		storage := b.BytesWithTailroom()
-		copy(storage[32:], p)
-		full = append(full, storage[:cap(storage)])
+		frame, b := ownedFrame(t, p)
 		buffers = append(buffers, b)
-		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[32:]}, storage, 32, func([]byte) error { return nil }); err != nil {
+		if err := r.RouteIPv4Owned(ctx, frame, func([]byte) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if err := flush(); err != nil {
 		t.Fatal(err)
 	}
-	for i, f := range full {
-		for j := 32 + len(p); j < len(f); j++ {
+	for i, b := range buffers {
+		// The view is the virtio header room plus the packet; beyond it lies
+		// the tailroom GRO grew into.
+		f := b.BytesWithTailroom()
+		if b.Len() != 16+len(p) {
+			t.Fatalf("buffer %d view %d bytes, want header room and packet", i, b.Len())
+		}
+		f = f[:cap(f)]
+		for j := 16 + len(p); j < len(f); j++ {
 			if f[j] != 0 {
 				t.Fatalf("buffer %d byte %d not zero after flush", i, j)
 			}
@@ -355,10 +368,10 @@ func TestOwnedBatchRejectsClosedReboundForgottenOrCancelledPackets(t *testing.T)
 				return true
 			}))
 			p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
-			storage := make([]byte, 16+len(p))
-			copy(storage[16:], p)
+			frame, buffer := ownedFrame(t, p)
+			defer buffer.Release()
 			staleCalled, replacementCalled := false, false
-			if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { staleCalled = true; return nil }); err != nil {
+			if err := r.RouteIPv4Owned(ctx, frame, func([]byte) error { staleCalled = true; return nil }); err != nil {
 				t.Fatal(err)
 			}
 			if checks == 0 {
@@ -448,10 +461,8 @@ func TestSessionCloseDuringBlockedFlushDoesNotBlockProcessingOrReviveRoute(t *te
 			})
 			queue := func() func() error {
 				ctx, flush := r.NewRouteBatch(base)
-				p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
-				storage := make([]byte, 16+len(p))
-				copy(storage[16:], p)
-				if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { t.Error("stale route"); return nil }); err != nil {
+				frame, _ := ownedFrame(t, ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8}))
+				if err := r.RouteIPv4Owned(ctx, frame, func([]byte) error { t.Error("stale route"); return nil }); err != nil {
 					t.Error(err)
 				}
 				return flush
@@ -516,8 +527,9 @@ func TestBindingGuardsComposeAndRejectBeforeQueue(t *testing.T) {
 			}
 		}
 		ctx, flush := r.NewRouteBatch(WithBindingGuard(WithBindingGuard(context.Background(), guard(0)), guard(1)))
-		p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
-		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: p}, p, 0, nil); err != nil {
+		frame, buffer := ownedFrame(t, ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8}))
+		defer buffer.Release()
+		if err := r.RouteIPv4Owned(ctx, frame, nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := flush(); err != nil {
@@ -547,18 +559,17 @@ func TestOwnedRoutingSteadyStateAllocatesNothing(t *testing.T) {
 	r, _ := NewRouter(d)
 	r.Bind(netip.MustParseAddr("10.0.0.2"), func([]byte) error { return nil })
 	ctx, flush := r.NewRouteBatch(context.Background())
-	p := ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8})
-	storage := make([]byte, 16+len(p))
-	copy(storage[16:], p)
+	frame, buffer := ownedFrame(t, ipv4Packet([4]byte{10, 0, 0, 2}, [4]byte{8, 8, 8, 8}))
+	defer buffer.Release()
 	send := server.PacketWriter(func([]byte) error { return nil })
-	frame := server.DataFrame{IPv4: storage[16:]}
 	route := func() {
-		if err := r.RouteIPv4Owned(ctx, frame, storage, 16, send); err != nil {
+		if err := r.RouteIPv4Owned(ctx, frame, send); err != nil {
 			t.Fatal(err)
 		}
 		if err := flush(); err != nil {
 			t.Fatal(err)
 		}
+		_ = buffer.TrimFront(16) // the driver's next frame: view back on the packet
 	}
 	route()
 	if allocs := testing.AllocsPerRun(100, route); allocs > 0.01 {

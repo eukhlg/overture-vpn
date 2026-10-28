@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/flowhash"
 	"github.com/eukhlg/netio/packetbuf"
 )
 
@@ -34,14 +35,65 @@ type Router struct {
 	// flush writes the route map only when a session's route actually changes.
 	published   map[netip.Addr]uint64
 	nextBinding uint64
+	// shards, when set, replace writeMu and device.Write on the batch flush
+	// path; helpers carries their work to the helper goroutines.
+	shards  []*writeShard
+	helpers chan *shardGroup
+	offload bool
+}
+
+// writeShard is one parallel TUN write path. mu serialises its writer, whose
+// coalescing state is not safe for concurrent use.
+type writeShard struct {
+	mu     sync.Mutex
+	writer Writer
 }
 
 func NewRouter(device Device) (*Router, error) {
 	if device == nil {
 		return nil, errors.New("tun: device is required")
 	}
-	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64), published: make(map[netip.Addr]uint64)}, nil
+	d, _ := device.(interface{ OffloadEnabled() bool })
+	return &Router{device: device, offload: d != nil && d.OffloadEnabled(), routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64), published: make(map[netip.Addr]uint64)}, nil
 }
+
+// SetWriteShards splits batch flushes into n flow-sharded TUN writers that
+// write in parallel, each with its own descriptor and coalescing state. A flow
+// always maps to one shard, so per-flow order and GRO coalescing survive.
+// Call before routing traffic. It reports the shard count in effect: 1 when n
+// <= 1 or the device has no parallel writers. Writers close with the device;
+// the n-1 helper goroutines, idle when there is no traffic, live as long as
+// the process, like the router.
+func (r *Router) SetWriteShards(n int) (int, error) {
+	if r.shards != nil {
+		return 0, errors.New("tun: write shards already set")
+	}
+	source, ok := r.device.(WriterSource)
+	if n <= 1 || !ok {
+		return 1, nil
+	}
+	shards := make([]*writeShard, n)
+	for i := range shards {
+		writer, err := source.NewWriter()
+		if err != nil {
+			return 0, err
+		}
+		shards[i] = &writeShard{writer: writer}
+	}
+	r.shards, r.helpers = shards, make(chan *shardGroup, n)
+	for i := 0; i < n-1; i++ {
+		go func() {
+			for g := range r.helpers {
+				g.run()
+				g.batch.helping.Done()
+			}
+		}()
+	}
+	return n, nil
+}
+
+// WriteShards reports the number of TUN write paths used by batch flushes.
+func (r *Router) WriteShards() int { return max(len(r.shards), 1) }
 
 func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 	r.mu.Lock()
@@ -55,6 +107,10 @@ func (r *Router) Bind(address netip.Addr, send SendIPv4) {
 
 // BindOwned installs a writer consuming its buffer on every outcome. Device
 // I/O and routing remain unchanged; only return-packet storage is transferred.
+// Ownership contract of the download path: Run hands each packet to send and
+// never touches it again; send either releases it or passes it to a transport,
+// whose sender goroutine releases it exactly once after the write (see
+// udptransport.Datagram). Packets of one flow must reach one sender in order.
 func (r *Router) BindOwned(address netip.Addr, send func(*packetbuf.Buffer) error) {
 	r.mu.Lock()
 	r.nextBinding++
@@ -321,12 +377,30 @@ func (r *Router) admit(packets []routePacket, accepted []bool) {
 
 type routeBatchKey struct{}
 type routeBatch struct {
-	router   *Router
-	bufs     [][]byte
-	spans    []span
-	offset   int
+	router *Router
+	writeRun
 	pending  []routePacket
 	accepted []bool
+	// groups holds one entry per write shard; helping counts groups handed
+	// to helper goroutines during a sharded flush.
+	groups  []shardGroup
+	helping sync.WaitGroup
+}
+
+// writeRun accumulates packets with equal offset into device writes.
+type writeRun struct {
+	bufs   [][]byte
+	spans  []span
+	offset int
+}
+
+// shardGroup holds one flush's packets for one write shard, as pending indices.
+type shardGroup struct {
+	batch *routeBatch
+	shard *writeShard
+	writeRun
+	packets []int
+	err     error
 }
 
 type routePacket struct {
@@ -350,72 +424,172 @@ type span struct {
 // The producer stops using it before transferring it to the flush consumer.
 // No references may outlive flush; the driver owns and releases all storage.
 func (r *Router) NewRouteBatch(ctx context.Context) (context.Context, func() error) {
-	batch := &routeBatch{router: r, bufs: make([][]byte, 0, 128)}
+	batch := &routeBatch{router: r, writeRun: writeRun{bufs: make([][]byte, 0, 128)}}
 	return context.WithValue(ctx, routeBatchKey{}, batch), batch.flush
 }
 func (b *routeBatch) flush() error {
+	if b.router.shards != nil {
+		return b.flushSharded()
+	}
 	// Serialise delivery, then recheck each packet at admission to this write.
 	// Guards protect only short checks, never blocking device I/O.
 	b.router.writeMu.Lock()
 	defer b.router.writeMu.Unlock()
-	defer func() {
-		clear(b.pending)
-		b.pending = b.pending[:0]
-		b.accepted = b.accepted[:0]
-	}()
-	// Guards may take transport locks, so evaluate them before the router lock.
+	defer b.reset()
+	b.check()
+	for i := range b.pending {
+		if !b.accepted[i] {
+			continue
+		}
+		p := &b.pending[i]
+		if err := b.add(b.router.device, p.packet, p.offset); err != nil {
+			return err
+		}
+	}
+	return b.write(b.router.device)
+}
+
+// check evaluates guards, which may take transport locks, before admission
+// takes the router lock.
+func (b *routeBatch) check() {
 	b.accepted = b.accepted[:0]
 	for i := range b.pending {
 		g := b.pending[i].guard
 		b.accepted = append(b.accepted, g == nil || g(noop))
 	}
 	b.router.admit(b.pending, b.accepted)
-	for i := range b.pending {
-		if !b.accepted[i] {
-			continue
-		}
-		p := &b.pending[i]
-		if len(b.bufs) > 0 && (b.offset != p.offset || len(b.bufs) == 128) {
-			if err := b.write(); err != nil {
-				return err
-			}
-		}
-		b.offset = p.offset
-		b.bufs = append(b.bufs, p.packet)
-	}
-	return b.write()
 }
 
-// write runs only in the flush stage with writeMu held. GRO may reorder and
-// extend packets, so scrub all original spans before their owners release them.
-func (b *routeBatch) write() error {
-	if len(b.bufs) == 0 {
-		return nil
+func (b *routeBatch) reset() {
+	clear(b.pending)
+	b.pending = b.pending[:0]
+	b.accepted = b.accepted[:0]
+}
+
+// flushSharded writes each shard's packets under that shard's lock only, so
+// flushes of different flows, and the shards of one flush, write in parallel.
+// The flushing goroutine writes one group and helpers the others; it waits
+// for all, so no reference outlives flush.
+func (b *routeBatch) flushSharded() error {
+	defer b.reset()
+	b.check()
+	shards := b.router.shards
+	if b.groups == nil {
+		b.groups = make([]shardGroup, len(shards))
+		for i := range b.groups {
+			b.groups[i].batch, b.groups[i].shard = b, shards[i]
+		}
 	}
-	b.spans = b.spans[:0]
-	for _, p := range b.bufs {
-		b.spans = append(b.spans, span{unsafe.SliceData(p), len(p)})
+	for i := range b.pending {
+		if b.accepted[i] {
+			p := &b.pending[i]
+			g := &b.groups[flowhash.Shard(flowhash.IPv4(p.packet[p.offset:]), len(shards))]
+			g.packets = append(g.packets, i)
+		}
 	}
-	_, err := b.router.device.Write(b.bufs, b.offset)
-	scrubGrowth(b.bufs, b.spans)
-	clear(b.spans)
-	clear(b.bufs)
-	b.bufs = b.bufs[:0]
+	var own *shardGroup
+	for i := range b.groups {
+		g := &b.groups[i]
+		if len(g.packets) == 0 {
+			continue
+		}
+		if own == nil {
+			own = g
+			continue
+		}
+		b.helping.Add(1)
+		select {
+		case b.router.helpers <- g:
+		default: // all helpers busy: write it here
+			g.run()
+			b.helping.Done()
+		}
+	}
+	if own != nil {
+		own.run()
+	}
+	b.helping.Wait()
+	var err error
+	for i := range b.groups {
+		g := &b.groups[i]
+		if err == nil {
+			err = g.err
+		}
+		g.err = nil
+		g.packets = g.packets[:0]
+	}
 	return err
 }
 
-// RouteIPv4Owned retains only slice references until the driver flushes.
-func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, storage []byte, offset int, send server.PacketWriter) error {
-	if offset < 0 || offset > len(storage) || len(frame.IPv4) > len(storage)-offset {
+func (g *shardGroup) run() {
+	g.shard.mu.Lock()
+	defer g.shard.mu.Unlock()
+	writer := g.shard.writer
+	for _, i := range g.packets {
+		p := &g.batch.pending[i]
+		if g.err = g.add(writer, p.packet, p.offset); g.err != nil {
+			return
+		}
+	}
+	g.err = g.write(writer)
+}
+
+// add appends a packet, first writing the run if the offset changes or the
+// run is full.
+func (w *writeRun) add(writer Writer, packet []byte, offset int) error {
+	if len(w.bufs) > 0 && (w.offset != offset || len(w.bufs) == 128) {
+		if err := w.write(writer); err != nil {
+			return err
+		}
+	}
+	w.offset = offset
+	w.bufs = append(w.bufs, packet)
+	return nil
+}
+
+// write runs only in the flush stage, holding the lock of writer (writeMu or
+// a shard's). GRO may reorder and extend packets, so scrub all original spans
+// before their owners release them.
+func (w *writeRun) write(writer Writer) error {
+	if len(w.bufs) == 0 {
+		return nil
+	}
+	w.spans = w.spans[:0]
+	for _, p := range w.bufs {
+		w.spans = append(w.spans, span{unsafe.SliceData(p), len(p)})
+	}
+	_, err := writer.Write(w.bufs, w.offset)
+	scrubGrowth(w.bufs, w.spans)
+	clear(w.spans)
+	clear(w.bufs)
+	w.bufs = w.bufs[:0]
+	return err
+}
+
+// RouteIPv4Owned retains only slice references until the driver flushes. It
+// borrows frame.Buffer in place: it prepends up to 16 bytes of the buffer's
+// headroom for the TUN virtio header and, with offload, lends GRO the
+// buffer's tailroom (scrubbed after the write).
+func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
+	buffer := frame.Buffer
+	if buffer == nil || buffer.Len() != len(frame.IPv4) {
 		return ErrInvalidPacket
 	}
 	p, ok, err := r.prepare(ctx, frame, send)
 	if err != nil || !ok {
 		return err
 	}
-	// Rebase without copying: all plain packets reserve the same TUN headroom.
-	headroom := min(offset, 16)
-	p.packet, p.offset = storage[offset-headroom:offset+len(frame.IPv4)], headroom
+	// All packets reserve the same TUN headroom, so batches rarely split.
+	headroom := min(buffer.Headroom(), 16)
+	if _, err := buffer.Prepend(headroom); err != nil {
+		return err
+	}
+	if r.offload {
+		p.packet = buffer.BytesWithTailroom()
+	} else {
+		p.packet = buffer.Bytes()
+	}
+	p.offset = headroom
 	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
 	if batch == nil || batch.router != r {
 		batch = &routeBatch{router: r}
@@ -426,10 +600,7 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 	return nil
 }
 
-func (r *Router) OffloadEnabled() bool {
-	d, ok := r.device.(interface{ OffloadEnabled() bool })
-	return ok && d.OffloadEnabled()
-}
+func (r *Router) OffloadEnabled() bool { return r.offload }
 
 // scrubGrowth zeroes bytes a write-offload backend appended beyond each
 // packet's original end. Owners record only the original packet as written, so

@@ -13,6 +13,7 @@ import (
 	"github.com/eukhlg/ipsec-go/protocol/esp"
 	ipsec "github.com/eukhlg/ipsec-go/server"
 	"github.com/eukhlg/netio/udptransport"
+	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
 	toml "github.com/pelletier/go-toml/v2"
 )
 
@@ -42,6 +43,7 @@ type appConfig struct {
 		Backend       string `toml:"backend"`
 		Offload       bool   `toml:"offload"`
 		TxQueueLength int    `toml:"tx_queue_length"`
+		WriteShards   int    `toml:"write_shards"`
 		Enabled       bool   `toml:"enabled"`
 		Name          string `toml:"name"`
 	} `toml:"tun"`
@@ -54,6 +56,7 @@ type appConfig struct {
 		ReceiveBuffer int  `toml:"receive_buffer"`
 		UDPBatch      int  `toml:"udp_batch"`
 		UDPGSO        bool `toml:"udp_gso"`
+		SendShards    int  `toml:"send_shards"`
 	} `toml:"l2tp"`
 	IPsec struct {
 		Enabled          bool   `toml:"enabled"`
@@ -69,6 +72,8 @@ type appConfig struct {
 		MaxSAs           int    `toml:"max_sas"`
 		ForceNATT        bool   `toml:"force_natt"`
 		ReceiveWorkers   int    `toml:"receive_workers"`
+		SealWorkers      int    `toml:"seal_workers"`
+		DeliveryWorkers  int    `toml:"delivery_workers"`
 		ReplayWindowSize int    `toml:"replay_window_size"`
 		IKELifetime      string `toml:"ike_lifetime"`
 		ESPLifetime      string `toml:"esp_lifetime"`
@@ -84,6 +89,7 @@ type appConfig struct {
 		NewTunnelBurst      int     `toml:"new_tunnel_burst"`
 	} `toml:"limits"`
 	receiveWorkersSource string
+	sealWorkersSource    string
 }
 
 type networkConfig struct {
@@ -107,6 +113,8 @@ func defaultConfig() appConfig {
 	c.IPsec.MaxHalfOpen, c.IPsec.MaxSAsPerPeer = 128, 4
 	c.IPsec.ReceiveWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 	c.receiveWorkersSource = "automatic default"
+	c.IPsec.SealWorkers = defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	c.sealWorkersSource = "automatic default"
 	c.L2TP.Pipeline = true
 	c.L2TP.UDPGSO = true
 	// Measured in plain-pipeline-2026-10-27: with the pipeline, a 1 MiB buffer
@@ -137,6 +145,7 @@ func loadConfig(path string) (appConfig, error) {
 		var explicit struct {
 			IPsec struct {
 				ReceiveWorkers *int `toml:"receive_workers"`
+				SealWorkers    *int `toml:"seal_workers"`
 			} `toml:"ipsec"`
 		}
 		if err := toml.NewDecoder(bytes.NewReader(data)).Decode(&explicit); err != nil {
@@ -145,6 +154,9 @@ func loadConfig(path string) (appConfig, error) {
 		if explicit.IPsec.ReceiveWorkers != nil {
 			c.receiveWorkersSource = "config"
 		}
+		if explicit.IPsec.SealWorkers != nil {
+			c.sealWorkersSource = "config"
+		}
 	}
 	if err := applyEnvironment(&c); err != nil {
 		return c, err
@@ -152,6 +164,41 @@ func loadConfig(path string) (appConfig, error) {
 	return c, nil
 }
 
+// sendShards resolves l2tp.send_shards; 0 selects the automatic count.
+func (c appConfig) sendShards() int {
+	if c.L2TP.SendShards > 0 {
+		return c.L2TP.SendShards
+	}
+	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+}
+
+// writeShards resolves tun.write_shards; 0 selects the automatic count.
+func (c appConfig) writeShards() int {
+	if c.TUN.WriteShards > 0 {
+		return c.TUN.WriteShards
+	}
+	return defaultWriteShards(runtime.GOMAXPROCS(0))
+}
+
+// defaultWriteShards is clamp(GOMAXPROCS, 1, 4). In upload-egress-2026-10-28
+// (6 vCPU) four writers gave plain upload P4 +9.1% over one and +3.5% over
+// the GOMAXPROCS/3 count of two; one per CPU up to four.
+func defaultWriteShards(maxProcs int) int {
+	return min(max(maxProcs, 1), 4)
+}
+
+// deliveryWorkers resolves ipsec.delivery_workers; 0 selects one worker. In
+// upload-egress-2026-10-28 more workers did not raise NAT-T upload (delivery
+// was not the limit) and four cost 5%.
+func (c appConfig) deliveryWorkers() int {
+	if c.IPsec.DeliveryWorkers > 0 {
+		return c.IPsec.DeliveryWorkers
+	}
+	return 1
+}
+
+// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards use
+// the same automatic count.
 func defaultReceiveWorkers(maxProcs int) int {
 	workers := maxProcs / 3
 	if workers < 1 {
@@ -174,6 +221,9 @@ func applyEnvironment(c *appConfig) error {
 		return err
 	}
 	if err := overrideInt("L2TP_UDP_BATCH", &c.L2TP.UDPBatch); err != nil {
+		return err
+	}
+	if err := overrideInt("L2TP_SEND_SHARDS", &c.L2TP.SendShards); err != nil {
 		return err
 	}
 	overrideString("L2TP_LISTEN", &c.Server.Listen)
@@ -225,6 +275,9 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideInt("L2TP_TUN_TX_QUEUE_LENGTH", &c.TUN.TxQueueLength); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_TUN_WRITE_SHARDS", &c.TUN.WriteShards); err != nil {
+		return err
+	}
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}
@@ -261,6 +314,15 @@ func applyEnvironment(c *appConfig) error {
 		}
 		c.receiveWorkersSource = "environment"
 	}
+	if _, ok := lookupNonempty("L2TP_IPSEC_SEAL_WORKERS"); ok {
+		if err := overrideInt("L2TP_IPSEC_SEAL_WORKERS", &c.IPsec.SealWorkers); err != nil {
+			return err
+		}
+		c.sealWorkersSource = "environment"
+	}
+	if err := overrideInt("L2TP_IPSEC_DELIVERY_WORKERS", &c.IPsec.DeliveryWorkers); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_IPSEC_REPLAY_WINDOW_SIZE", &c.IPsec.ReplayWindowSize); err != nil {
 		return err
 	}
@@ -292,11 +354,17 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	if c.TUN.TxQueueLength < 0 || c.TUN.TxQueueLength > 65535 {
 		return networkConfig{}, nil, fmt.Errorf("tun.tx_queue_length must be between 0 and 65535")
 	}
+	if c.TUN.WriteShards < 0 || c.TUN.WriteShards > 16 {
+		return networkConfig{}, nil, fmt.Errorf("tun.write_shards must be between 0 and 16")
+	}
 	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")
 	}
 	if err := udptransport.ValidateBatchSize(c.L2TP.UDPBatch); err != nil {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.udp_batch: %w", err)
+	}
+	if c.L2TP.SendShards < 0 || c.L2TP.SendShards > 16 {
+		return networkConfig{}, nil, fmt.Errorf("l2tp.send_shards must be between 0 and 16")
 	}
 	if err := udptransport.ValidateBatchSize(c.IPsec.UDPSendBatch); err != nil {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.udp_send_batch: %w", err)
@@ -334,6 +402,12 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.IPsec.ReceiveWorkers < 0 || c.IPsec.ReceiveWorkers > ipsec.ESPReceiveCapacity {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.receive_workers must be between 0 and %d", ipsec.ESPReceiveCapacity)
+	}
+	if c.IPsec.SealWorkers < 0 || c.IPsec.SealWorkers > l2tpipsec.SealCapacity {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.seal_workers must be between 0 and %d", l2tpipsec.SealCapacity)
+	}
+	if c.IPsec.DeliveryWorkers < 0 || c.IPsec.DeliveryWorkers > 16 {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.delivery_workers must be between 0 and 16")
 	}
 	if size := c.IPsec.ReplayWindowSize; size < esp.ReplayWindowSize || size > esp.MaxReplayWindowSize || size%64 != 0 {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.replay_window_size must be a multiple of 64 between %d and %d", esp.ReplayWindowSize, esp.MaxReplayWindowSize)
