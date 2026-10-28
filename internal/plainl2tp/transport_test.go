@@ -239,8 +239,8 @@ func TestShardedTransportKeepsFlowsInOrderOverRealSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer transport.Close()
-	if transport.SendShards() != 3 {
-		t.Fatalf("shards = %d", transport.SendShards())
+	if transport.SendShards() != 3 || transport.SendDescriptors() != 3 {
+		t.Fatalf("shards = %d descriptors = %d", transport.SendShards(), transport.SendDescriptors())
 	}
 	const flows, perFlow = 6, 40
 	for i := 0; i < perFlow; i++ {
@@ -258,8 +258,12 @@ func TestShardedTransportKeepsFlowsInOrderOverRealSocket(t *testing.T) {
 	receiver.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for n := 0; n < flows*perFlow; n++ {
 		buf := make([]byte, 4)
-		if _, _, err := receiver.ReadFrom(buf); err != nil {
+		_, from, err := receiver.ReadFrom(buf)
+		if err != nil {
 			t.Fatal(err)
+		}
+		if from.String() != socket.LocalAddr().String() {
+			t.Fatalf("datagram from %v, want the transport's address %v", from, socket.LocalAddr())
 		}
 		f := int(buf[0])
 		if int(buf[1]) != next[f] {

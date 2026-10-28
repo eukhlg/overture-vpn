@@ -112,7 +112,7 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("plain L2TP UDP GSO active=%t requested=%t", plain.GSOEnabled(), resolved.L2TP.UDPGSO)
-	log.Printf("plain L2TP send shards=%d requested=%d (0 = automatic)", plain.SendShards(), resolved.L2TP.SendShards)
+	log.Printf("plain L2TP send shards=%d descriptors=%d requested=%d (0 = automatic)", plain.SendShards(), plain.SendDescriptors(), resolved.L2TP.SendShards)
 	s, err := server.New(plain, serverConfig)
 	if err != nil {
 		plain.Close()

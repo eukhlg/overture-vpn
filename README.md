@@ -184,7 +184,9 @@ goroutines on the plain socket. The router hashes each inner IPv4 flow
 flow always uses one shard and keeps its order, while the kernel send work of
 different flows runs on different CPUs. `0` (default) selects
 `clamp(GOMAXPROCS/3, 1, 4)`. A single flow uses one shard whatever the setting.
-Startup logs the effective count.
+Each shard writes through its own descriptor for the socket (a duplicate with
+the same bound address), because Go serializes writes per descriptor. Startup
+logs the effective count and the number of descriptors.
 
 A larger receive buffer can improve throughput and reduce drops, but increases
 queueing delay under saturation. In the socket-tuning VPS run at batch 128,

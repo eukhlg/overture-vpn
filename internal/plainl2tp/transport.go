@@ -24,9 +24,10 @@ var (
 
 type Transport struct {
 	net.PacketConn
-	receiver *udptransport.Conn
-	sender   *udptransport.ShardedSender
-	messages []udptransport.Message
+	receiver    *udptransport.Conn
+	sender      *udptransport.ShardedSender
+	messages    []udptransport.Message
+	descriptors int
 }
 
 func New(conn net.PacketConn, batchSize ...int) (*Transport, error) {
@@ -48,9 +49,12 @@ func NewWithOptions(conn net.PacketConn, size int, options udptransport.Options)
 }
 
 // NewSharded sends through shards independent sender goroutines on the same
-// socket. The first shard shares the receiver's Conn (separate rx/tx state);
-// each further shard has its own batch writer. Flow-keyed writes keep each
-// inner flow on one shard; control and unkeyed writes use flow key 0.
+// socket. The first shard shares the receiver's descriptor and Conn (separate
+// rx/tx state); each further shard writes through its own duplicate descriptor
+// with its own batch writer, because Go serializes writes per descriptor.
+// Where duplication is unavailable a shard shares conn and still works, but
+// serialized. Flow-keyed writes keep each inner flow on one shard; control and
+// unkeyed writes use flow key 0.
 func NewSharded(conn net.PacketConn, size, shards int, options udptransport.Options) (*Transport, error) {
 	if shards < 1 {
 		return nil, errors.New("plain L2TP: at least one send shard required")
@@ -59,21 +63,41 @@ func NewSharded(conn net.PacketConn, size, shards int, options udptransport.Opti
 	if err != nil {
 		return nil, err
 	}
-	writers := []udptransport.Writer{udp}
-	for len(writers) < shards {
-		writer, err := udptransport.NewWithOptions(conn, size, options)
-		if err != nil {
-			return nil, err
+	list := []udptransport.Shard{{Conn: conn, Writer: udp}}
+	descriptors := 1
+	fail := func(err error) (*Transport, error) {
+		for _, shard := range list[1:] {
+			if shard.Conn != conn {
+				shard.Conn.Close()
+			}
 		}
-		writers = append(writers, writer)
-	}
-	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
-	sender, err := udptransport.NewShardedSender(context.Background(), conn, writers, udptransport.SenderQueueCapacity, size)
-	if err != nil {
 		return nil, err
 	}
-	return &Transport{PacketConn: conn, receiver: udp, sender: sender, messages: make([]udptransport.Message, size)}, nil
+	for len(list) < shards {
+		shardConn := conn
+		if duplicate, err := udptransport.DuplicatePacketConn(conn); err == nil {
+			shardConn = duplicate
+			descriptors++
+		}
+		writer, err := udptransport.NewWithOptions(shardConn, size, options)
+		if err != nil {
+			if shardConn != conn {
+				shardConn.Close()
+			}
+			return fail(err)
+		}
+		list = append(list, udptransport.Shard{Conn: shardConn, Writer: writer})
+	}
+	// Serve owns cancellation/deadlines so StopCCN can be sent before Close.
+	sender, err := udptransport.NewShardedSender(context.Background(), list, udptransport.SenderQueueCapacity, size)
+	if err != nil {
+		return fail(err)
+	}
+	return &Transport{PacketConn: conn, receiver: udp, sender: sender, messages: make([]udptransport.Message, size), descriptors: descriptors}, nil
 }
+
+// SendDescriptors reports how many distinct socket descriptors the shards use.
+func (t *Transport) SendDescriptors() int { return t.descriptors }
 
 // SendShards reports the number of sender goroutines.
 func (t *Transport) SendShards() int { return t.sender.Shards() }
