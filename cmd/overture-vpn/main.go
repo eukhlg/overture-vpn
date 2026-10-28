@@ -20,7 +20,6 @@ import (
 	"github.com/eukhlg/netio/packetbuf"
 	"github.com/eukhlg/netio/udptransport"
 	"github.com/eukhlg/overture-vpn/internal/l2tpipsec"
-	"github.com/eukhlg/overture-vpn/internal/plainl2tp"
 	"github.com/eukhlg/overture-vpn/tun"
 )
 
@@ -106,7 +105,7 @@ func main() {
 		_ = conn.Close()
 		log.Fatal(err)
 	}
-	plain, err := plainl2tp.NewSharded(conn, resolved.L2TP.UDPBatch, resolved.sendShards(), udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
+	plain, err := server.NewUDPTransport(conn, resolved.L2TP.UDPBatch, resolved.sendShards(), udptransport.Options{DisableGSO: !resolved.L2TP.UDPGSO}) // owns conn from here on
 	if err != nil {
 		conn.Close()
 		log.Fatal(err)
@@ -150,8 +149,6 @@ func main() {
 		// generation that flush rechecks before writing or publishing a route.
 		s.RouteIPv4 = router.RouteIPv4
 		s.RouteIPv4Owned = router.RouteIPv4Owned
-		// Room before each plain datagram for the TUN virtio header (10 bytes).
-		s.ReceiveHeadroom = 16
 		s.NewRouteBatch = router.NewRouteBatch
 		log.Printf("TUN routing enabled on %s (%s) backend=%s offload=%t requested=%t", device.Name(), prefix, resolved.TUN.Backend, router.OffloadEnabled(), resolved.TUN.Offload)
 		if q, ok := device.(interface{ TxQueueLength() (int, error) }); ok {

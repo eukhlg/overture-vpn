@@ -84,10 +84,13 @@ func TestNativeDeviceShardedUploadReachesKernel(t *testing.T) {
 			defer wg.Done()
 			batch, flush := r.NewRouteBatch(context.Background())
 			for f := 0; f < flowsPerWorker; f++ {
-				p := closedPortSegment(uint16(20000 + w*flowsPerWorker + f))
-				storage := make([]byte, 16+len(p), 65535+16)
-				copy(storage[16:], p)
-				if err := r.RouteIPv4Owned(batch, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { return nil }); err != nil {
+				buffer, err := packetbuf.Copy(closedPortSegment(uint16(20000 + w*flowsPerWorker + f)))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer buffer.Release()
+				if err := r.RouteIPv4Owned(batch, server.DataFrame{IPv4: buffer.Bytes(), Buffer: buffer}, func([]byte) error { return nil }); err != nil {
 					t.Error(err)
 				}
 			}

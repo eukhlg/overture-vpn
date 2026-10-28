@@ -1,13 +1,15 @@
 # Embedding the Overture libraries
 
 Overture VPN is the application. Its reusable protocol runtimes live in two
-independently versioned Go modules, neither of which imports the other.
+independently versioned Go modules, neither of which imports the other. Both
+build on netio, so packet storage is one type (`packetbuf.Buffer`) from
+socket to TUN in either direction.
 
 | Module/package | Responsibility |
 | --- | --- |
 | `github.com/eukhlg/l2tp-go/protocol/l2tp` | L2TPv2 wire format and control state |
 | `github.com/eukhlg/l2tp-go/protocol/ppp` | PPP, PAP, MS-CHAPv2, and IPCP |
-| `github.com/eukhlg/l2tp-go/server` | L2TP engine, UDP listener, address pool, session limits, and raw IPv4 callbacks |
+| `github.com/eukhlg/l2tp-go/server` | L2TP engine, UDP listener and netio transport, address pool, session limits, and raw IPv4 callbacks |
 | `github.com/eukhlg/ipsec-go/protocol/isakmp` | IKEv1 control plane |
 | `github.com/eukhlg/ipsec-go/protocol/esp` | ESP protection, replay checks, and NAT-T framing |
 | `github.com/eukhlg/ipsec-go/server` | IKE/NAT-T/raw ESP listeners and association registry |

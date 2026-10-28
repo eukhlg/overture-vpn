@@ -39,6 +39,7 @@ type Router struct {
 	// path; helpers carries their work to the helper goroutines.
 	shards  []*writeShard
 	helpers chan *shardGroup
+	offload bool
 }
 
 // writeShard is one parallel TUN write path. mu serialises its writer, whose
@@ -52,7 +53,8 @@ func NewRouter(device Device) (*Router, error) {
 	if device == nil {
 		return nil, errors.New("tun: device is required")
 	}
-	return &Router{device: device, routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64), published: make(map[netip.Addr]uint64)}, nil
+	d, _ := device.(interface{ OffloadEnabled() bool })
+	return &Router{device: device, offload: d != nil && d.OffloadEnabled(), routes: make(map[netip.Addr]SendIPv4), ownedRoutes: make(map[netip.Addr]func(*packetbuf.Buffer) error), bindings: make(map[netip.Addr]uint64), published: make(map[netip.Addr]uint64)}, nil
 }
 
 // SetWriteShards splits batch flushes into n flow-sharded TUN writers that
@@ -564,18 +566,30 @@ func (w *writeRun) write(writer Writer) error {
 	return err
 }
 
-// RouteIPv4Owned retains only slice references until the driver flushes.
-func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, storage []byte, offset int, send server.PacketWriter) error {
-	if offset < 0 || offset > len(storage) || len(frame.IPv4) > len(storage)-offset {
+// RouteIPv4Owned retains only slice references until the driver flushes. It
+// borrows frame.Buffer in place: it prepends up to 16 bytes of the buffer's
+// headroom for the TUN virtio header and, with offload, lends GRO the
+// buffer's tailroom (scrubbed after the write).
+func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, send server.PacketWriter) error {
+	buffer := frame.Buffer
+	if buffer == nil || buffer.Len() != len(frame.IPv4) {
 		return ErrInvalidPacket
 	}
 	p, ok, err := r.prepare(ctx, frame, send)
 	if err != nil || !ok {
 		return err
 	}
-	// Rebase without copying: all plain packets reserve the same TUN headroom.
-	headroom := min(offset, 16)
-	p.packet, p.offset = storage[offset-headroom:offset+len(frame.IPv4)], headroom
+	// All packets reserve the same TUN headroom, so batches rarely split.
+	headroom := min(buffer.Headroom(), 16)
+	if _, err := buffer.Prepend(headroom); err != nil {
+		return err
+	}
+	if r.offload {
+		p.packet = buffer.BytesWithTailroom()
+	} else {
+		p.packet = buffer.Bytes()
+	}
+	p.offset = headroom
 	batch, _ := ctx.Value(routeBatchKey{}).(*routeBatch)
 	if batch == nil || batch.router != r {
 		batch = &routeBatch{router: r}
@@ -586,10 +600,7 @@ func (r *Router) RouteIPv4Owned(ctx context.Context, frame server.DataFrame, sto
 	return nil
 }
 
-func (r *Router) OffloadEnabled() bool {
-	d, ok := r.device.(interface{ OffloadEnabled() bool })
-	return ok && d.OffloadEnabled()
-}
+func (r *Router) OffloadEnabled() bool { return r.offload }
 
 // scrubGrowth zeroes bytes a write-offload backend appended beyond each
 // packet's original end. Owners record only the original packet as written, so

@@ -101,11 +101,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 	raw.ReceiveWorkers, natt.ReceiveWorkers = config.IPsec.ReceiveWorkers, config.IPsec.ReceiveWorkers
 	raw.HandleDecrypted, natt.HandleDecrypted = bridge.HandleDecryptedPacket, bridge.HandleDecryptedPacket
 	if router != nil {
-		// One context per delivery goroutine, with slots for the per-packet guard
-		// and storage, so delivering a packet allocates no context.
+		// One context per delivery goroutine, with a slot for the per-packet
+		// guard, so delivering a packet allocates no context.
 		newBatch := func(ctx context.Context) (context.Context, func() error) {
 			ctx, flush := router.NewRouteBatch(ctx)
-			return server.WithPacketStorageSlot(tun.WithBindingGuardSlot(ctx)), flush
+			return tun.WithBindingGuardSlot(ctx), flush
 		}
 		raw.NewDeliveryBatch, natt.NewDeliveryBatch = newBatch, newBatch
 	}
@@ -173,24 +173,11 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 			callbackContext = tun.WithBindingGuard(callbackContext, result.WithActive)
 		}
 		defer tun.SetBindingGuard(callbackContext, nil)
-		var storage []byte
-		if buffer := ipsec.DeliveryBuffer(callbackContext); buffer != nil {
-			// Delivery owns the buffer until its flush hook returns. Recover the
-			// consumed receive headroom without moving any packet bytes.
-			if _, err := buffer.Prepend(buffer.Headroom()); err != nil {
-				return err
-			}
-			storage = buffer.Bytes()
-			if router != nil && router.OffloadEnabled() {
-				// Spare capacity for GRO without marking the slot dirty; the
-				// router zeroes whatever the backend appends after its write.
-				storage = buffer.BytesWithTailroom()
-			}
+		if data := result.L2TP.Data; data != nil {
+			// Delivery owns the decrypted buffer until its flush hook returns;
+			// the router borrows it in place (see server.OwnedIPv4Router).
+			data.Buffer = ipsec.DeliveryBuffer(callbackContext)
 		}
-		if !server.SetPacketStorage(callbackContext, storage) && storage != nil {
-			callbackContext = server.WithPacketStorage(callbackContext, storage)
-		}
-		defer server.SetPacketStorage(callbackContext, nil)
 		err := l2tpServer.DispatchIPv4(callbackContext, result.L2TP, "l2tp/ipsec", func(peer net.Addr, tunnelID, sessionID uint16, payload []byte) error {
 			buffer, err := packetbuf.Copy(payload)
 			if err != nil {

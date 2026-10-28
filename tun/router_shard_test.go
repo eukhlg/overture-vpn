@@ -11,6 +11,7 @@ import (
 
 	"github.com/eukhlg/l2tp-go/server"
 	"github.com/eukhlg/netio/flowhash"
+	"github.com/eukhlg/netio/packetbuf"
 )
 
 // shardedDevice hands out writers that record packets per writer and fail on
@@ -30,6 +31,8 @@ type recordingWriter struct {
 	written [][]byte
 	writes  int
 }
+
+func (d *shardedDevice) OffloadEnabled() bool { return d.grow }
 
 func (d *shardedDevice) NewWriter() (Writer, error) {
 	d.mu.Lock()
@@ -81,9 +84,9 @@ func newShardedRouter(t *testing.T, d *shardedDevice, n int) *Router {
 
 func routeOwned(t *testing.T, r *Router, ctx context.Context, packet []byte) {
 	t.Helper()
-	storage := make([]byte, 16+len(packet), 16+2*len(packet))
-	copy(storage[16:], packet)
-	if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { return nil }); err != nil {
+	frame, buffer := ownedFrame(t, packet)
+	t.Cleanup(buffer.Release)
+	if err := r.RouteIPv4Owned(ctx, frame, func([]byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -157,13 +160,12 @@ func TestShardedFlushScrubsGrowthPerShard(t *testing.T) {
 	r := newShardedRouter(t, d, 2)
 	a, b := distinctShardFlows(2)
 	ctx, flush := r.NewRouteBatch(context.Background())
-	var full [][]byte
+	var buffers []*packetbuf.Buffer
 	for _, flow := range []byte{a, b, a, b} {
-		p := flowPacket(flow, 0)
-		storage := make([]byte, 16+len(p), 16+2*len(p))
-		copy(storage[16:], p)
-		full = append(full, storage[:cap(storage)])
-		if err := r.RouteIPv4Owned(ctx, server.DataFrame{IPv4: storage[16:]}, storage, 16, func([]byte) error { return nil }); err != nil {
+		frame, buffer := ownedFrame(t, flowPacket(flow, 0))
+		defer buffer.Release()
+		buffers = append(buffers, buffer)
+		if err := r.RouteIPv4Owned(ctx, frame, func([]byte) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -175,7 +177,9 @@ func TestShardedFlushScrubsGrowthPerShard(t *testing.T) {
 			t.Fatalf("writer %d writes=%d, want 1", w.id, w.writes)
 		}
 	}
-	for i, f := range full {
+	for i, buffer := range buffers {
+		f := buffer.BytesWithTailroom()
+		f = f[:cap(f)]
 		for j := 36; j < len(f); j++ {
 			if f[j] != 0 {
 				t.Fatalf("buffer %d byte %d not zero after flush", i, j)
@@ -230,23 +234,23 @@ func TestShardedFlushSteadyStateAllocatesNothing(t *testing.T) {
 	a, b := distinctShardFlows(2)
 	ctx, flush := r.NewRouteBatch(context.Background())
 	var frames []server.DataFrame
-	var storages [][]byte
 	for _, flow := range []byte{a, b} {
-		p := flowPacket(flow, 0)
-		storage := make([]byte, 16+len(p))
-		copy(storage[16:], p)
-		storages = append(storages, storage)
-		frames = append(frames, server.DataFrame{IPv4: storage[16:]})
+		frame, buffer := ownedFrame(t, flowPacket(flow, 0))
+		defer buffer.Release()
+		frames = append(frames, frame)
 	}
 	send := server.PacketWriter(func([]byte) error { return nil })
 	route := func() {
 		for i := range frames {
-			if err := r.RouteIPv4Owned(ctx, frames[i], storages[i], 16, send); err != nil {
+			if err := r.RouteIPv4Owned(ctx, frames[i], send); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if err := flush(); err != nil {
 			t.Fatal(err)
+		}
+		for i := range frames {
+			_ = frames[i].Buffer.TrimFront(16)
 		}
 	}
 	route()
