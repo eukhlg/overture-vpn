@@ -29,6 +29,9 @@ offload = true # L2TP_TUN_OFFLOAD; Linux VNET_HDR, with runtime fallback
 # 0 = automatic: 32 with offload active, kernel setting otherwise. Shorter
 # rings bound download queueing delay; offload makes each entry up to 64 KB.
 tx_queue_length = 0
+# Parallel TUN writers for upload, 0..16; L2TP_TUN_WRITE_SHARDS. Each inner
+# flow stays on one writer, in order. 0 = automatic clamp(GOMAXPROCS/3, 1, 4).
+write_shards = 0
 enabled = true
 name = "l2tp0"
 
@@ -71,6 +74,10 @@ udp_gso = true
 # clamp(GOMAXPROCS/3, 1, 4); 0 or 1 seals on the TUN reader (serial).
 # Packets still leave in sequence order for every SA.
 # seal_workers = 2
+# Upload delivery goroutines after ESP decryption, 0..16;
+# L2TP_IPSEC_DELIVERY_WORKERS. Each inner flow stays on one worker, in order;
+# session events are ordered against all. 0 = automatic clamp(GOMAXPROCS/3, 1, 4).
+delivery_workers = 0
 # Experimental IKEv1 + raw ESP and NAT-T transport. Requires CAP_NET_RAW.
 enabled = true
 ike_listen = ":500"

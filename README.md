@@ -144,6 +144,15 @@ reservation order, so every SA's packets leave in sequence order and never
 test the client's replay window. The default and the 0/1 serial setting
 follow `receive_workers`.
 
+`[ipsec].delivery_workers` (`L2TP_IPSEC_DELIVERY_WORKERS`, 0..16) runs that
+many goroutines for the stage after ESP decryption and replay commit, which
+hands upload packets to the router. Data packets go to the worker of their
+inner IPv4 flow, so one flow keeps its order while different flows reach the
+TUN writers in parallel; session events (open, close, PPP control) wait for
+all earlier packets and run before any later one. `0` (default) selects
+`clamp(GOMAXPROCS/3, 1, 4)`; `1` keeps one delivery goroutine. Startup logs
+the effective count.
+
 `[ipsec].receive_buffer` (`L2TP_IPSEC_RECEIVE_BUFFER`) requests a receive
 buffer in bytes for each NAT-T and raw ESP listener. The default is 524288
 (512 KiB; Linux reports 1 MiB effective); set `0` to keep the kernel setting. Values through 1073741823 bytes
@@ -332,6 +341,15 @@ sweep, 32 entries cut loaded download ping p50 from 10.2 to 2.0 ms (one stream)
 and from 37.6 to 1.6 ms (four streams) for plain L2TP, and from 20.6 / 67.8 to
 3.7 / 2.6 ms for NAT-T, at 0-6% less download throughput; 16 entries begin to
 drop upload-direction ACKs. Startup logs the effective length.
+
+`[tun].write_shards` (`L2TP_TUN_WRITE_SHARDS`, 0..16, Linux) splits each
+upload flush into that many TUN writers that write in parallel. Each writer
+has its own duplicate of the TUN descriptor (Go serializes writes per
+descriptor; the kernel handles each TUN write in the caller's context) and its
+own offload coalescing state. Packets are assigned by inner IPv4 flow, the same
+hash as `send_shards`, so a flow keeps its order and its coalescing. `0`
+(default) selects `clamp(GOMAXPROCS/3, 1, 4)`; `1` keeps one writer. Startup
+logs the effective count.
 
 Native execution does not modify host IP forwarding or NAT. Configure those
 with the host firewall/router policy appropriate for the machine. The Docker

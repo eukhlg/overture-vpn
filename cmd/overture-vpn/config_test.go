@@ -15,7 +15,7 @@ func clearConfigEnvironment(t *testing.T) {
 		"L2TP_USERS", "L2TP_USERNAME", "L2TP_PASSWORD", "L2TP_CLIENT_SUBNET",
 		"L2TP_SERVER_IP", "L2TP_CLIENT_POOL_START", "L2TP_CLIENT_POOL_SIZE",
 		"L2TP_CLIENT_SUBNET_START", "L2TP_CLIENT_SUBNET_LIMIT", "L2TP_CLIENT_IP",
-		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME", "L2TP_TUN_OFFLOAD", "L2TP_TUN_TX_QUEUE_LENGTH",
+		"L2TP_DNS", "L2TP_MTU", "L2TP_TUN_ENABLED", "L2TP_TUN_NAME", "L2TP_TUN_OFFLOAD", "L2TP_TUN_TX_QUEUE_LENGTH", "L2TP_TUN_WRITE_SHARDS", "L2TP_IPSEC_DELIVERY_WORKERS",
 		"L2TP_NAT_ENABLED", "L2TP_NAT_INTERFACE", "L2TP_MAX_SESSIONS",
 		"L2TP_MAX_SESSIONS_PER_TUNNEL", "L2TP_MAX_SESSIONS_PER_USER",
 		"L2TP_IPSEC_ENABLED", "L2TP_IPSEC_IKE_LISTEN", "L2TP_IPSEC_NATT_LISTEN", "L2TP_IPSEC_ESP_LISTEN",
@@ -463,6 +463,37 @@ func TestPlainSendShardsConfig(t *testing.T) {
 		valid := value >= 0 && value <= 16
 		if _, _, err := c.validate(); (err == nil) != valid {
 			t.Fatalf("send_shards=%d valid=%v err=%v", value, valid, err)
+		}
+	}
+}
+
+func TestUploadEgressShardConfig(t *testing.T) {
+	clearConfigEnvironment(t)
+	automatic := defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+	c, err := loadConfig("")
+	if err != nil || c.writeShards() != automatic || c.deliveryWorkers() != automatic {
+		t.Fatalf("default: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	path := writeConfig(t, "[tun]\nwrite_shards = 3\n[ipsec]\ndelivery_workers = 2\n")
+	c, err = loadConfig(path)
+	if err != nil || c.writeShards() != 3 || c.deliveryWorkers() != 2 {
+		t.Fatalf("file: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	t.Setenv("L2TP_TUN_WRITE_SHARDS", "1")
+	t.Setenv("L2TP_IPSEC_DELIVERY_WORKERS", "4")
+	c, err = loadConfig(path)
+	if err != nil || c.writeShards() != 1 || c.deliveryWorkers() != 4 {
+		t.Fatalf("environment: %d %d %v", c.writeShards(), c.deliveryWorkers(), err)
+	}
+	for _, value := range []int{-1, 0, 1, 16, 17} {
+		valid := value >= 0 && value <= 16
+		for _, set := range []func(*appConfig){func(c *appConfig) { c.TUN.WriteShards = value }, func(c *appConfig) { c.IPsec.DeliveryWorkers = value }} {
+			c := defaultConfig()
+			c.Authentication.Users = []userConfig{{Username: "test", Password: "test"}}
+			set(&c)
+			if _, _, err := c.validate(); (err == nil) != valid {
+				t.Fatalf("value %d valid=%v err=%v", value, valid, err)
+			}
 		}
 	}
 }

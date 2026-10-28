@@ -8,6 +8,7 @@ import (
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/flowhash"
 	"net"
 	"net/netip"
 	"testing"
@@ -385,5 +386,31 @@ func TestPendingCryptoCannotReviveClosedProtectedSession(t *testing.T) {
 				t.Fatalf("resurrection delivered=%v tunnels=%d", delivered, engine.TunnelCount())
 			}
 		})
+	}
+}
+
+// Data dispatches carry their inner flow, so delivery workers keep each flow in
+// order; session events carry none and are ordered against all dispatches.
+func TestPacketResultKeysDataByInnerFlow(t *testing.T) {
+	bridge := &ESPBridge{}
+	packet := make([]byte, 24)
+	packet[0], packet[3], packet[9] = 0x45, 24, 17
+	copy(packet[12:20], []byte{10, 0, 0, 2, 8, 8, 8, 8})
+	data := &server.DataFrame{IPv4: packet}
+	info := server.SessionInfo{TunnelID: 1, SessionID: 2}
+	for name, c := range map[string]struct {
+		result server.Result
+		keyed  bool
+	}{
+		"data":       {server.Result{Data: data}, true},
+		"empty data": {server.Result{Data: &server.DataFrame{}}, false},
+		"opened":     {server.Result{Opened: &info}, false},
+		"closed":     {server.Result{Closed: []server.SessionInfo{info}}, false},
+		"data+open":  {server.Result{Data: data, Opened: &info}, false},
+	} {
+		out := bridge.packetResult(ESPBridgeResult{L2TP: c.result})
+		if out.FlowValid != c.keyed || (c.keyed && out.Flow != flowhash.IPv4(packet)) {
+			t.Fatalf("%s: flow=%d valid=%t", name, out.Flow, out.FlowValid)
+		}
 	}
 }

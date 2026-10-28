@@ -43,6 +43,7 @@ type appConfig struct {
 		Backend       string `toml:"backend"`
 		Offload       bool   `toml:"offload"`
 		TxQueueLength int    `toml:"tx_queue_length"`
+		WriteShards   int    `toml:"write_shards"`
 		Enabled       bool   `toml:"enabled"`
 		Name          string `toml:"name"`
 	} `toml:"tun"`
@@ -72,6 +73,7 @@ type appConfig struct {
 		ForceNATT        bool   `toml:"force_natt"`
 		ReceiveWorkers   int    `toml:"receive_workers"`
 		SealWorkers      int    `toml:"seal_workers"`
+		DeliveryWorkers  int    `toml:"delivery_workers"`
 		ReplayWindowSize int    `toml:"replay_window_size"`
 		IKELifetime      string `toml:"ike_lifetime"`
 		ESPLifetime      string `toml:"esp_lifetime"`
@@ -170,8 +172,24 @@ func (c appConfig) sendShards() int {
 	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
 }
 
-// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards use the
-// same automatic count.
+// writeShards resolves tun.write_shards; 0 selects the automatic count.
+func (c appConfig) writeShards() int {
+	if c.TUN.WriteShards > 0 {
+		return c.TUN.WriteShards
+	}
+	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+}
+
+// deliveryWorkers resolves ipsec.delivery_workers; 0 selects the automatic count.
+func (c appConfig) deliveryWorkers() int {
+	if c.IPsec.DeliveryWorkers > 0 {
+		return c.IPsec.DeliveryWorkers
+	}
+	return defaultReceiveWorkers(runtime.GOMAXPROCS(0))
+}
+
+// defaultReceiveWorkers is clamp(GOMAXPROCS/3, 1, 4); plain send shards, TUN
+// write shards and ESP delivery workers use the same automatic count.
 func defaultReceiveWorkers(maxProcs int) int {
 	workers := maxProcs / 3
 	if workers < 1 {
@@ -248,6 +266,9 @@ func applyEnvironment(c *appConfig) error {
 	if err := overrideInt("L2TP_TUN_TX_QUEUE_LENGTH", &c.TUN.TxQueueLength); err != nil {
 		return err
 	}
+	if err := overrideInt("L2TP_TUN_WRITE_SHARDS", &c.TUN.WriteShards); err != nil {
+		return err
+	}
 	if err := overrideBool("L2TP_NAT_ENABLED", &c.NAT.Enabled); err != nil {
 		return err
 	}
@@ -290,6 +311,9 @@ func applyEnvironment(c *appConfig) error {
 		}
 		c.sealWorkersSource = "environment"
 	}
+	if err := overrideInt("L2TP_IPSEC_DELIVERY_WORKERS", &c.IPsec.DeliveryWorkers); err != nil {
+		return err
+	}
 	if err := overrideInt("L2TP_IPSEC_REPLAY_WINDOW_SIZE", &c.IPsec.ReplayWindowSize); err != nil {
 		return err
 	}
@@ -320,6 +344,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.TUN.TxQueueLength < 0 || c.TUN.TxQueueLength > 65535 {
 		return networkConfig{}, nil, fmt.Errorf("tun.tx_queue_length must be between 0 and 65535")
+	}
+	if c.TUN.WriteShards < 0 || c.TUN.WriteShards > 16 {
+		return networkConfig{}, nil, fmt.Errorf("tun.write_shards must be between 0 and 16")
 	}
 	if c.L2TP.ReceiveBuffer < 0 || int64(c.L2TP.ReceiveBuffer) > (1<<31-1)/2 {
 		return networkConfig{}, nil, fmt.Errorf("l2tp.receive_buffer must be between 0 and 1073741823 bytes")
@@ -369,6 +396,9 @@ func (c appConfig) validate() (networkConfig, map[string]string, error) {
 	}
 	if c.IPsec.SealWorkers < 0 || c.IPsec.SealWorkers > l2tpipsec.SealCapacity {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.seal_workers must be between 0 and %d", l2tpipsec.SealCapacity)
+	}
+	if c.IPsec.DeliveryWorkers < 0 || c.IPsec.DeliveryWorkers > 16 {
+		return networkConfig{}, nil, fmt.Errorf("ipsec.delivery_workers must be between 0 and 16")
 	}
 	if size := c.IPsec.ReplayWindowSize; size < esp.ReplayWindowSize || size > esp.MaxReplayWindowSize || size%64 != 0 {
 		return networkConfig{}, nil, fmt.Errorf("ipsec.replay_window_size must be a multiple of 64 between %d and %d", esp.ReplayWindowSize, esp.MaxReplayWindowSize)

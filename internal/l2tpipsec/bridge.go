@@ -11,6 +11,7 @@ import (
 	"github.com/eukhlg/l2tp-go/protocol/l2tp"
 	"github.com/eukhlg/l2tp-go/protocol/ppp"
 	"github.com/eukhlg/l2tp-go/server"
+	"github.com/eukhlg/netio/flowhash"
 	"github.com/eukhlg/netio/packetbuf"
 	"net"
 	"net/netip"
@@ -418,6 +419,11 @@ func (b *ESPBridge) resultEligibility(result server.Result) func() bool {
 
 func (b *ESPBridge) packetResult(result ESPBridgeResult) ipsec.ESPPacketResult {
 	out := ipsec.ESPPacketResult{Datagrams: result.Datagrams}
+	// Data of an established session runs on its flow's delivery worker;
+	// session events (open, close, control) stay ordered against everything.
+	if data := result.L2TP.Data; data != nil && len(data.IPv4) != 0 && result.L2TP.Opened == nil && len(result.L2TP.Closed) == 0 {
+		out.Flow, out.FlowValid = flowhash.IPv4(data.IPv4), true
+	}
 	if b.HandleResult != nil {
 		sessionEligible := result.eligible
 		if sessionEligible == nil {

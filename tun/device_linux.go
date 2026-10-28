@@ -15,9 +15,20 @@ import (
 
 type systemDevice struct {
 	wgtun.Device
-	name     string
-	offload  bool
-	writeMu  sync.Mutex
+	name    string
+	offload bool
+	writeMu sync.Mutex
+	gro     groState
+	// writersMu guards writers, the duplicated descriptors from NewWriter.
+	// They keep the interface alive, so Close closes them first.
+	writersMu sync.Mutex
+	writers   []*os.File
+	closed    bool
+}
+
+// groState is the write-offload coalescing state of one writer. It is not
+// safe for concurrent use; each writer owns one.
+type groState struct {
 	tcpTable *tcpGROTable
 	udpTable *udpGROTable
 	toWrite  []int
@@ -41,33 +52,111 @@ func (d *systemDevice) Write(bufs [][]byte, offset int) (int, error) {
 		}
 		return len(bufs), nil
 	}
+	return d.gro.write(d.Device.File(), bufs, offset)
+}
+
+// write submits offload-mode packets to file, coalescing them first when the
+// headroom holds a virtio header.
+func (g *groState) write(file *os.File, bufs [][]byte, offset int) (int, error) {
 	if offset < 10 {
 		for i, b := range bufs {
 			var prefix [10]byte
-			if err := writeVector(d.Device.File(), [][]byte{prefix[:], b[offset:]}); err != nil {
+			if err := writeVector(file, [][]byte{prefix[:], b[offset:]}); err != nil {
 				return i, err
 			}
 		}
 		return len(bufs), nil
 	}
-	if d.tcpTable == nil {
-		d.tcpTable = newTCPGROTable()
-		d.udpTable = newUDPGROTable()
+	if g.tcpTable == nil {
+		g.tcpTable = newTCPGROTable()
+		g.udpTable = newUDPGROTable()
 	}
-	defer d.tcpTable.reset()
-	defer d.udpTable.reset()
-	d.toWrite = d.toWrite[:0]
-	if err := handleGRO(bufs, offset, d.tcpTable, d.udpTable, false, &d.toWrite); err != nil {
+	defer g.tcpTable.reset()
+	defer g.udpTable.reset()
+	g.toWrite = g.toWrite[:0]
+	if err := handleGRO(bufs, offset, g.tcpTable, g.udpTable, false, &g.toWrite); err != nil {
 		return 0, err
 	}
-	for _, i := range d.toWrite {
+	for _, i := range g.toWrite {
 		b := bufs[i][offset-virtioNetHdrLen:]
-		n, err := d.Device.File().Write(b)
+		n, err := file.Write(b)
 		if err != nil {
 			return 0, err
 		}
 		if n != len(b) {
 			return 0, io.ErrShortWrite
+		}
+	}
+	return len(bufs), nil
+}
+
+// NewWriter returns a writer on a duplicate of the device descriptor with its
+// own coalescing state, so writers run in parallel with each other and with
+// Write: Go serialises writes per descriptor, while the kernel handles each
+// TUN write in the writer's context. A writer is not safe for concurrent use.
+// Device Close closes all writers.
+func (d *systemDevice) NewWriter() (Writer, error) {
+	d.writersMu.Lock()
+	defer d.writersMu.Unlock()
+	if d.closed {
+		return nil, os.ErrClosed
+	}
+	raw, err := d.Device.File().SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var fd int
+	var dupErr error
+	if err := raw.Control(func(old uintptr) {
+		fd, dupErr = unix.FcntlInt(old, unix.F_DUPFD_CLOEXEC, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if dupErr != nil {
+		return nil, fmt.Errorf("tun: duplicate descriptor: %w", dupErr)
+	}
+	// The duplicate shares the non-blocking file status, so the runtime
+	// poller manages it like the original.
+	file := os.NewFile(uintptr(fd), "tun")
+	d.writers = append(d.writers, file)
+	return &fileWriter{file: file, offload: d.offload}, nil
+}
+
+func (d *systemDevice) Close() error {
+	d.writersMu.Lock()
+	d.closed = true
+	writers := d.writers
+	d.writers = nil
+	d.writersMu.Unlock()
+	for _, file := range writers {
+		_ = file.Close()
+	}
+	return d.Device.Close()
+}
+
+type fileWriter struct {
+	file    *os.File
+	offload bool
+	gro     groState
+}
+
+func (w *fileWriter) Write(bufs [][]byte, offset int) (int, error) {
+	for i, b := range bufs {
+		if offset < 0 || offset >= len(b) {
+			return i, io.ErrShortBuffer
+		}
+	}
+	if w.offload {
+		return w.gro.write(w.file, bufs, offset)
+	}
+	for i, b := range bufs {
+		p := b[offset:]
+		n, err := w.file.Write(p)
+		if err != nil {
+			return i, err
+		}
+		if n != len(p) {
+			return i, io.ErrShortWrite
 		}
 	}
 	return len(bufs), nil

@@ -140,6 +140,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if _, err := router.SetWriteShards(resolved.writeShards()); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("TUN write shards=%d requested=%d (0 = automatic)", router.WriteShards(), resolved.TUN.WriteShards)
 		// Plain packets need no per-packet session guard: the Engine accepted
 		// each one for an established session in this same processing goroutine,
 		// and session close or rebind (Forget, Bind) changes the address binding

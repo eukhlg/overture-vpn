@@ -48,6 +48,17 @@ type Device interface {
 	Name() string
 }
 
+// Writer is an independent write path to a device, with the semantics of
+// Device.Write. A writer is not safe for concurrent use.
+type Writer interface {
+	Write(bufs [][]byte, offset int) (int, error)
+}
+
+// WriterSource is implemented by devices whose writers run in parallel.
+type WriterSource interface {
+	NewWriter() (Writer, error)
+}
+
 func validateBackend(config Config) error {
 	if config.Backend != "" && config.Backend != "system" {
 		return errors.New("tun: unsupported backend: " + config.Backend)
