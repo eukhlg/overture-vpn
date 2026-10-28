@@ -26,7 +26,7 @@ type ipsecRuntime struct {
 	registry  *ipsec.ESPRegistry
 	control   *isakmp.ControlPlane
 	done      chan error
-	sender    *l2tpipsec.ESPSender
+	sender    *ipsec.ESPSender
 	bridge    *l2tpipsec.ESPBridge
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -155,7 +155,7 @@ func startIPsec(ctx context.Context, config appConfig, l2tpServer *server.Server
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	sender, err := l2tpipsec.NewESPSenderWithOptions(ctx, raw.Conn, natt.Conn, l2tpipsec.SenderQueueCapacity, config.IPsec.UDPSendBatch, udptransport.Options{DisableGSO: !config.IPsec.UDPGSO})
+	sender, err := ipsec.NewESPSender(ctx, raw.Conn, natt.Conn, udptransport.SenderQueueCapacity, config.IPsec.UDPSendBatch, udptransport.Options{DisableGSO: !config.IPsec.UDPGSO})
 	if err != nil {
 		cancel()
 		_ = raw.Close()

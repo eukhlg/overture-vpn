@@ -16,7 +16,7 @@ import (
 	"github.com/eukhlg/netio/udptransport"
 )
 
-func sealPipelineBridge(t *testing.T, writer datagramWriter) (*ESPBridge, *net.UDPAddr, isakmp.ESPPair, *ESPSender) {
+func sealPipelineBridge(t *testing.T, writer udptransport.Writer) (*ESPBridge, *net.UDPAddr, isakmp.ESPPair, *ipsec.ESPSender) {
 	t.Helper()
 	peer := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 10), Port: 4500}
 	logical := &net.UDPAddr{IP: peer.IP, Port: 40000}
@@ -29,7 +29,7 @@ func sealPipelineBridge(t *testing.T, writer datagramWriter) (*ESPBridge, *net.U
 	bridge, _ := NewESPBridge(server.NewEngine(server.Config{}), registry)
 	association := openTestAssociation(t, registry, peer, pair)
 	bridge.flows[flowKey(logical)] = espFlow{session: association, peer: peer, logicalPeer: logical, clientPort: 40000}
-	sender, err := newESPSender(context.Background(), newSenderConn(), newSenderConn(), 8, writer, 32)
+	sender, err := ipsec.NewESPSenderWithWriter(context.Background(), newSenderConn(), newSenderConn(), writer, 8, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestSealPipelineCloseReleasesInFlight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < SealCapacity+SenderQueueCapacity; i++ {
+		for i := 0; i < SealCapacity+udptransport.SenderQueueCapacity; i++ {
 			buffer, _ := packetbuf.Copy([]byte{1, 2, 3, 4})
 			views = append(views, buffer.Bytes()[:4])
 			if err := bridge.sendL2TPBuffer(logical, buffer); err != nil {

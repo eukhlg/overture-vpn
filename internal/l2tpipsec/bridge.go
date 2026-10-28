@@ -42,8 +42,9 @@ type ESPBridge struct {
 	// Application callbacks and device I/O must never hold it.
 	deliveryMu sync.RWMutex
 
-	// Sender is configured before serving. All ESP replies then share its FIFO.
-	Sender                *ESPSender
+	// Sender is configured before serving. Every ESP reply goes through it, in
+	// sequence order per SA.
+	Sender                *ipsec.ESPSender
 	outboundMu            sync.Mutex
 	Engine                *server.Engine
 	Registry              *ipsec.ESPRegistry
@@ -66,7 +67,7 @@ func (b *ESPBridge) StartSealPipeline(ctx context.Context, workers int) {
 	if workers <= 1 || b.Sender == nil {
 		return
 	}
-	b.seals = newSealPipeline(ctx, workers, b.Sender.enqueue, func(err error) {
+	b.seals = newSealPipeline(ctx, workers, b.Sender.EnqueueContext, func(err error) {
 		if b.Debugf != nil {
 			b.Debugf("esp sealed packet dropped at enqueue error=%v", err)
 		}

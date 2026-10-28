@@ -1,7 +1,6 @@
 package l2tpipsec
 
 import (
-	"context"
 	"net"
 	"sync"
 	"testing"
@@ -25,7 +24,7 @@ func TestOwnedSendDoesNotRequireFlowWriteLock(t *testing.T) {
 	bridge, _ := NewESPBridge(server.NewEngine(server.Config{}), registry)
 	association := openTestAssociation(t, registry, peer, pair)
 	bridge.flows[flowKey(logical)] = espFlow{session: association, peer: peer, logicalPeer: logical, clientPort: 40000}
-	sender, _ := NewESPSender(context.Background(), newSenderConn(), newSenderConn(), 1)
+	sender := newTestESPSender(t, newSenderConn(), newSenderConn(), 1)
 	sender.Close()
 	bridge.Sender = sender
 	buffer, _ := packetbuf.Copy([]byte("data"))
@@ -68,7 +67,7 @@ func TestOwnedSendRekeyRaceCannotResurrectDeletedFlow(t *testing.T) {
 			t.Fatal(err)
 		}
 		registry.Remove(first.Inbound.SPI)
-		sender, _ := NewESPSender(context.Background(), newSenderConn(), newSenderConn(), 1)
+		sender := newTestESPSender(t, newSenderConn(), newSenderConn(), 1)
 		sender.Close()
 		bridge.Sender = sender
 		start := make(chan struct{})
