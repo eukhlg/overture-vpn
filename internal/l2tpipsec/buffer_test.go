@@ -2,7 +2,6 @@ package l2tpipsec
 
 import (
 	"bytes"
-	"context"
 	"net"
 	"testing"
 
@@ -77,7 +76,7 @@ func TestOwnedBridgeReplacementAndEnqueueFailure(t *testing.T) {
 		}
 		registry.Remove(first.Inbound.SPI)
 		raw, natt := newSenderConn(), newSenderConn()
-		sender, _ := NewESPSender(context.Background(), raw, natt, 1)
+		sender := newTestESPSender(t, raw, natt, 1)
 		bridge.Sender = sender
 		if failEnqueue {
 			sender.Close()
